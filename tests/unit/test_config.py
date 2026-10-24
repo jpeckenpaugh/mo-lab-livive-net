@@ -68,7 +68,11 @@ def test_promotion_and_monitoring_configs_load() -> None:
     monitoring = load_monitoring_config(CONFIG_DIR / "monitoring.yaml")
 
     assert promotion.auto_promote is False
-    assert "model" in promotion.required_artifacts
+    assert promotion.required_artifacts == ["model", "evaluation.json"]
+    assert promotion.registry.registered_model_name == "modelops-lab-classifier"
+    assert promotion.registry.alias == "champion"
+    assert promotion.evaluation_split == "validation"
+    assert promotion.quality_floor.roc_auc == pytest.approx(0.83)
     assert monitoring.min_sample_size == 100
     assert monitoring.current.window_size >= monitoring.min_sample_size
     assert monitoring.reference.window_size >= monitoring.min_sample_size
@@ -128,6 +132,16 @@ def test_auto_promote_true_is_rejected(tmp_path: Path) -> None:
     assert "reserved" in str(error.value)
 
 
+def test_inferior_training_config_is_the_deliberately_weak_candidate() -> None:
+    baseline = load_training_config(CONFIG_DIR / "training.yaml")
+    inferior = load_training_config(CONFIG_DIR / "training_inferior.yaml")
+
+    assert pytest.approx(1e-4) == inferior.model.hyperparameters.C
+    assert inferior.dataset == baseline.dataset
+    assert inferior.split == baseline.split
+    assert inferior.model.random_state == baseline.model.random_state
+
+
 def test_monitoring_samples_must_fit_windows(tmp_path: Path) -> None:
     data = read_yaml("monitoring.yaml")
     data["current"]["window_size"] = 50
@@ -150,11 +164,33 @@ def test_environment_overrides_yaml(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_json_environment_override_for_list(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MODELOPS_REQUIRED_ARTIFACTS", '["model", "evaluation_report"]')
+    monkeypatch.setenv("MODELOPS_REQUIRED_ARTIFACTS", '["model", "evaluation.json"]')
 
     config = load_promotion_config(CONFIG_DIR / "promotion.yaml")
 
-    assert config.required_artifacts == ["model", "evaluation_report"]
+    assert config.required_artifacts == ["model", "evaluation.json"]
+
+
+def test_unknown_required_artifact_is_rejected(tmp_path: Path) -> None:
+    data = read_yaml("promotion.yaml")
+    data["required_artifacts"] = ["model", "dataset_manifest"]
+    path = write_yaml(tmp_path, "promotion.yaml", data)
+
+    with pytest.raises(ConfigError) as error:
+        load_promotion_config(path)
+
+    message = str(error.value)
+    assert "dataset_manifest" in message
+    assert "known names are model, evaluation.json" in message
+
+
+def test_invalid_registry_alias_is_rejected(tmp_path: Path) -> None:
+    data = read_yaml("promotion.yaml")
+    data["registry"]["alias"] = "not a valid alias"
+    path = write_yaml(tmp_path, "promotion.yaml", data)
+
+    with pytest.raises(ConfigError, match="registry.alias"):
+        load_promotion_config(path)
 
 
 def test_unknown_environment_override_under_known_section_is_rejected(

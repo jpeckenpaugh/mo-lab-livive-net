@@ -227,3 +227,37 @@ as three separate verdicts. W3's gate must record the evaluation slice in its
 decision record.
 **Revisit if:** A regime is added that intentionally changes both P(X) and
 P(y|X).
+
+---
+
+## ADR-012 — Promotion state machine and concurrency guarantee
+
+**Date:** 2026-10-24
+**Status:** Accepted
+**Context:** W3 introduced registration, the gate, the active pointer, and
+concurrent promotion. The ordering between the registry alias and the database
+determines what a failure can leave behind.
+**Decision:**
+1. Candidates are registered **before** gate evaluation, idempotently per run.
+   A rejected candidate stays registered but unaliased; rejection is an audit
+   outcome, not a registration rollback.
+2. The gate records nine checks into a `PromotionDecision`, persisted to
+   Postgres, to `artifacts/decisions/<id>.json`, and as additive tags on the
+   candidate run. An approved decision cannot contain a failed check.
+3. Approval takes a transaction-scoped Postgres advisory lock, re-reads the
+   pointer, and aborts with `PromotionConflict` if it differs from the version
+   captured when the gate began. It then sets the alias, writes the decision and
+   transition, and updates the pointer **last**.
+4. Re-promoting the active candidate is an explicit no-op: exit 0, no decision,
+   no transition.
+5. A crash after the alias move but before commit attempts to restore the
+   previous alias and reports that reconciliation is required. Serving reads the
+   pointer, never the alias, so the served model remains correct.
+**Rationale:** One serialized critical section makes "exactly one promotion
+wins" a property of the database, not of process timing. Writing the pointer
+last keeps the least recoverable failure on the least authoritative store.
+**Consequences:** W4 rollback must reuse the same lock and expected-version
+check, and ship a reconciliation command. W6 must serialize same-run
+registration across processes before concurrent retraining is allowed.
+**Revisit if:** MLflow offers transactional pointer semantics or a second writer
+is introduced.

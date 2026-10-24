@@ -144,12 +144,31 @@ class SmokeTestConfig(StrictConfigModel):
     max_latency_ms: float = Field(gt=0.0)
 
 
+class RegistryConfig(StrictConfigModel):
+    """Registered-model name and alias that mark approved artifacts (ADR-006)."""
+
+    registered_model_name: str = Field(min_length=1)
+    alias: str = Field(
+        min_length=1,
+        pattern=r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$",
+        description="MLflow alias applied to the approved model version.",
+    )
+
+
+KNOWN_REQUIRED_ARTIFACTS = ("model", "evaluation.json")
+
+
 class PromotionConfig(StrictConfigModel):
     """Policy and guardrails for candidate promotion."""
 
     quality_floor: QualityFloor
     regression_tolerance: RegressionTolerance
     required_artifacts: list[str] = Field(min_length=1)
+    registry: RegistryConfig
+    evaluation_split: Literal["validation"] = Field(
+        default="validation",
+        description="Comparison slice; ADR-011 fixes promotion evaluation to validation.",
+    )
     auto_promote: bool = Field(
         default=False,
         description="Reserved flag; automated promotion is not implemented and must remain false.",
@@ -164,6 +183,14 @@ class PromotionConfig(StrictConfigModel):
             raise ValueError("required_artifacts must not contain empty names")
         if len(set(cleaned)) != len(cleaned):
             raise ValueError("required_artifacts must be unique")
+        unknown = sorted(set(cleaned) - set(KNOWN_REQUIRED_ARTIFACTS))
+        if unknown:
+            raise ValueError(
+                "required_artifacts contains unknown logical name(s): "
+                + ", ".join(unknown)
+                + "; known names are "
+                + ", ".join(KNOWN_REQUIRED_ARTIFACTS)
+            )
         return cleaned
 
     @field_validator("auto_promote")

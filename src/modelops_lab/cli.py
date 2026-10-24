@@ -9,14 +9,22 @@ one actionable stderr line with exit status 1, never a traceback.
 
 from __future__ import annotations
 
+import getpass
 import json
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
 
 import typer
+from mlflow.exceptions import MlflowException
+from sqlalchemy.exc import SQLAlchemyError
 
-from modelops_lab.config import ConfigError, load_training_config
-from modelops_lab.contracts import DatasetManifest
+from modelops_lab.config import (
+    ConfigError,
+    load_promotion_config,
+    load_runtime_settings,
+    load_training_config,
+)
+from modelops_lab.contracts import DatasetManifest, PromotionVerdict
 from modelops_lab.data import (
     DEFAULT_DATASET_ROOT,
     REGIMES,
@@ -25,10 +33,24 @@ from modelops_lab.data import (
     prepare_dataset,
     verify_dataset,
 )
+from modelops_lab.db import DatabaseError, upgrade_database
+from modelops_lab.pointer import PointerError, PointerStore, PromotionConflict
+from modelops_lab.promotion import (
+    DEFAULT_DECISION_DIR,
+    MlflowCandidateInspector,
+    PromotionError,
+    PromotionRequest,
+    PromotionResult,
+    perform_promotion,
+    registry_for,
+    tag_candidate_run,
+)
+from modelops_lab.registry import RegistryError
 from modelops_lab.tracking import (
     TrackingError,
     load_run_model,
     log_training_run,
+    redact_uri,
     resolve_tracking_uri,
 )
 from modelops_lab.train import (
@@ -43,8 +65,8 @@ from modelops_lab.validation import DatasetValidationError
 app = typer.Typer(
     name="modelops",
     help=(
-        "ModelOps Lab lifecycle commands. `data`, `train`, and `evaluate` are "
-        "implemented; later waves remain stubs."
+        "ModelOps Lab lifecycle commands. `data`, `train`, `evaluate`, `promote`, "
+        "and `db` are implemented; later waves remain stubs."
     ),
     no_args_is_help=True,
     add_completion=False,
@@ -57,6 +79,13 @@ data_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(data_app, name="data")
+
+db_app = typer.Typer(
+    name="db",
+    help="Apply and inspect database schema migrations.",
+    no_args_is_help=True,
+)
+app.add_typer(db_app, name="db")
 
 
 def _not_implemented(command: str, wave: str, scope: str) -> NoReturn:
@@ -333,10 +362,237 @@ def evaluate(
     typer.echo(json.dumps(summary, indent=2, sort_keys=True))
 
 
+@db_app.command("upgrade")
+def db_upgrade(
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+) -> None:
+    """Apply every pending Alembic migration."""
+    url = (
+        database_url.strip()
+        if database_url and database_url.strip()
+        else load_runtime_settings().database_url
+    )
+    try:
+        upgrade_database(url)
+    except DatabaseError as exc:
+        _fail("db upgrade", str(exc))
+    typer.echo(f"database upgraded to head: {redact_uri(url)}")
+
+
 @app.command()
-def promote() -> None:
-    """Apply the promotion gate and record a decision (arrives in W3)."""
-    _not_implemented("promote", "W3", "registry writes and the promotion gate")
+def promote(
+    candidate_run_id: Annotated[
+        str,
+        typer.Option(
+            "--candidate-run-id",
+            help="MLflow run id of the candidate to evaluate.",
+        ),
+    ],
+    reason: Annotated[
+        str,
+        typer.Option(
+            "--reason",
+            help="Why this decision is being made; recorded verbatim.",
+        ),
+    ],
+    approve: Annotated[
+        bool,
+        typer.Option("--approve", help="Ask the gate to approve the candidate."),
+    ] = False,
+    reject: Annotated[
+        bool,
+        typer.Option("--reject", help="Reject the candidate even if every check passes."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Evaluate and print checks without writing a decision, pointer, or alias.",
+        ),
+    ] = False,
+    actor: Annotated[
+        str | None,
+        typer.Option("--actor", help="Human or service recording the decision."),
+    ] = None,
+    dataset: Annotated[
+        Path | None,
+        typer.Option(
+            "--dataset",
+            help="Dataset artifact to evaluate on; defaults to the run's dataset_version.",
+        ),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Promotion policy YAML.",
+            show_default=True,
+        ),
+    ] = Path("configs/promotion.yaml"),
+    training_config: Annotated[
+        Path,
+        typer.Option(
+            "--training-config",
+            help="Training YAML supplying the default tracking destination.",
+            show_default=True,
+        ),
+    ] = Path("configs/training.yaml"),
+    tracking_uri: Annotated[
+        str | None,
+        typer.Option(
+            "--tracking-uri",
+            help="Override tracking.uri and MLFLOW_TRACKING_URI for this invocation.",
+        ),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+) -> None:
+    """Evaluate the promotion gate and record an auditable decision."""
+    modes = [
+        name
+        for name, chosen in (
+            ("approve", approve),
+            ("reject", reject),
+            ("dry-run", dry_run),
+        )
+        if chosen
+    ]
+    if len(modes) != 1:
+        typer.echo(
+            "modelops promote: error: choose exactly one of --approve, --reject, --dry-run",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not reason.strip():
+        typer.echo("modelops promote: error: --reason must not be empty", err=True)
+        raise typer.Exit(code=2)
+
+    mode: Literal["approve", "reject", "dry-run"] = modes[0]  # type: ignore[assignment]
+    chosen_actor = (actor or "").strip() or _default_actor()
+    url = (
+        database_url.strip()
+        if database_url and database_url.strip()
+        else load_runtime_settings().database_url
+    )
+
+    try:
+        promotion = load_promotion_config(config)
+        training = load_training_config(training_config)
+        uri = resolve_tracking_uri(training.tracking.uri, tracking_uri)
+        candidate = MlflowCandidateInspector(uri).inspect(candidate_run_id)
+
+        dataset_dir = dataset
+        if dataset_dir is None:
+            version = candidate.tag("dataset_version")
+            if version is None:
+                raise PromotionError(
+                    f"run {candidate_run_id} has no dataset_version tag; pass --dataset explicitly"
+                )
+            dataset_dir = DEFAULT_DATASET_ROOT / version
+        loaded = load_prepared_dataset(dataset_dir)
+
+        store = PointerStore(url)
+        registry = registry_for(tracking_uri=uri, promotion_config=promotion)
+        result = perform_promotion(
+            PromotionRequest(
+                candidate_run_id=candidate_run_id,
+                mode=mode,
+                reason=reason,
+                actor=chosen_actor,
+            ),
+            promotion_config=promotion,
+            dataset=loaded,
+            candidate=candidate,
+            registry=registry,
+            store=store,
+            decision_dir=DEFAULT_DECISION_DIR,
+        )
+    except PromotionConflict as exc:
+        _fail("promote", str(exc))
+    except (
+        ConfigError,
+        DataError,
+        DatasetValidationError,
+        PromotionError,
+        PointerError,
+        RegistryError,
+        TrackingError,
+        SQLAlchemyError,
+        OSError,
+        ValueError,
+    ) as exc:
+        _fail("promote", str(exc))
+
+    _print_promotion_result(result, candidate_run_id)
+    if result.decision is not None:
+        try:
+            tag_candidate_run(uri, candidate_run_id, result.decision)
+        except (MlflowException, OSError) as exc:
+            typer.echo(
+                "modelops promote: warning: the decision was recorded, but the candidate "
+                f"run tags could not be written: {exc}",
+                err=True,
+            )
+    if result.verdict is PromotionVerdict.REJECTED and not result.dry_run:
+        raise typer.Exit(code=1)
+
+
+def _default_actor() -> str:
+    try:
+        return getpass.getuser() or "unknown"
+    except (KeyError, OSError):
+        return "unknown"
+
+
+def _print_promotion_result(result: PromotionResult, candidate_run_id: str) -> None:
+    if result.decision is None:
+        decision_id = "none (no-op)" if result.no_op else "none (dry run)"
+    else:
+        decision_id = result.decision.decision_id
+    typer.echo(f"decision_id: {decision_id}")
+    typer.echo(f"candidate_run_id: {candidate_run_id}")
+    typer.echo(f"candidate_version: {result.candidate_version or '<unregistered>'}")
+    before = result.active_before or "<none>"
+    if result.dry_run:
+        active = f"{before} (unchanged, dry run)"
+    elif result.no_op:
+        active = f"{before} (unchanged, no-op)"
+    elif result.active_after != result.active_before:
+        active = f"{before} -> {result.active_after}"
+    else:
+        active = f"{before} (unchanged)"
+    typer.echo(f"active: {active}")
+    if result.dry_run:
+        verdict = "would approve" if result.verdict is PromotionVerdict.APPROVED else "would reject"
+    else:
+        verdict = result.verdict.value
+    typer.echo(f"verdict: {verdict}")
+    typer.echo("checks:")
+    for check in result.checks:
+        status = "PASS" if check.passed else "FAIL"
+        lines = check.detail.splitlines() or [""]
+        typer.echo(f"  {check.name}: {status}  {lines[0]}")
+        for line in lines[1:]:
+            typer.echo(f"    {line}")
+    if result.decision_path is not None:
+        typer.echo(f"decision_record: {result.decision_path}")
+    if result.no_op:
+        typer.echo(
+            f"no-op: candidate version {result.candidate_version} is already active; "
+            "no decision or transition written"
+        )
 
 
 @app.command()

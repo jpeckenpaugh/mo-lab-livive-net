@@ -6,16 +6,17 @@ simple; the product is the operational path from a versioned dataset through
 training, promotion, serving, monitoring, drift detection, retraining, and
 rollback.
 
-**Current status: W2 training and experiment tracking.** The repository contains
+**Current status: W3 promotion gate and active pointer.** The repository contains
 the project packaging, validated configuration models, the frozen cross-wave
 contracts and their JSON Schemas, a seeded synthetic dataset generator with
 three drift regimes, schema validation, canonical serialization and
 fingerprinting, reproducible train/validation/test split manifests, the
 `modelops data` commands, a deterministic scikit-learn training pipeline that
-records a complete MLflow run, a Docker Compose PostgreSQL + MLflow stack, and
-the `modelops train` / `modelops evaluate` commands. Registry, serving, and
-monitoring remain stubs that exit with status 2 and name the wave that will
-implement them.
+records a complete MLflow run, a Docker Compose PostgreSQL + MLflow stack, the
+`modelops train` / `modelops evaluate` commands, and a policy-checked promotion
+gate with an MLflow registry alias, a transactional PostgreSQL active-model
+pointer, and recorded decisions. Serving and monitoring remain stubs that exit
+with status 2 and name the wave that will implement them.
 
 ## Quick start
 
@@ -44,12 +45,23 @@ uv run modelops evaluate \
   --dataset artifacts/datasets/synthetic-v1.0.0-<fingerprint> \
   --run-id <mlflow_run_id> \
   --tracking-uri http://localhost:5001
+
+# 6. Apply the schema once, then promote the candidate through the gate.
+uv run modelops db upgrade
+uv run modelops promote \
+  --candidate-run-id <mlflow_run_id> --approve \
+  --reason "baseline passes the calibrated floors" \
+  --tracking-uri http://localhost:5001
+open http://localhost:5001
 ```
 
 The dataset artifact layout, generator math, regimes, and fingerprint scheme are
 documented in [`docs/dataset.md`](docs/dataset.md). The pipeline, leakage
 guarantees, metric definitions, exact MLflow run schema, compose commands, and
-evaluate workflow are documented in [`docs/training.md`](docs/training.md).
+evaluate workflow are documented in [`docs/training.md`](docs/training.md). The
+gate checks, decision records, pointer/alias failure modes, concurrency
+guarantee, and the approved/rejected command sequences are documented in
+[`docs/promotion.md`](docs/promotion.md).
 
 ## Dataset quick start
 
@@ -88,10 +100,13 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-With the Compose stack running, exercise the real MLflow integration tier:
+With the Compose stack running, exercise the real PostgreSQL + MLflow integration
+tier:
 
 ```bash
-MODELOPS_TEST_TRACKING_URI=http://localhost:5001 uv run pytest -m integration
+MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
+  uv run pytest -m integration
 ```
 
 Regenerate the committed contract schemas after an intentional contract change:
@@ -116,11 +131,16 @@ not secrets.
 | `src/modelops_lab/validation.py` | Schema validation and strict CSV reading |
 | `src/modelops_lab/train.py` | Pipeline, metrics, deterministic fit/evaluate, evaluation document |
 | `src/modelops_lab/tracking.py` | MLflow run logging, audit tags, logged-model read-back |
+| `src/modelops_lab/registry.py` | MLflow registry protocol: idempotent registration, alias, version loading, reconcile |
+| `src/modelops_lab/promotion.py` | Gate checks, decision construction, approval orchestration, descriptor |
+| `src/modelops_lab/pointer.py` | Transactional active pointer, transition log, decision records |
+| `src/modelops_lab/db.py` | SQLAlchemy schema and the Alembic upgrade entry point |
+| `migrations/`, `alembic.ini` | Versioned promotion-state schema (`modelops db upgrade`) |
 | `src/modelops_lab/contracts/` | Frozen Pydantic contracts and schema exporter |
 | `contracts/` | Generated JSON Schemas, committed for review |
-| `src/modelops_lab/cli.py` | Typer command surface (`data`, `train`, `evaluate`; later waves are stubs) |
-| `tests/unit/` | Docker-free tests of config, contracts, schemas, data, training, tracking, and CLI |
-| `tests/integration/` | Real MLflow/Postgres tests (skipped unless `MODELOPS_TEST_TRACKING_URI` is set) |
+| `src/modelops_lab/cli.py` | Typer command surface (`data`, `db`, `train`, `evaluate`, `promote`; later waves are stubs) |
+| `tests/unit/` | Docker-free tests of config, contracts, schemas, data, training, tracking, promotion, and CLI |
+| `tests/integration/` | Real MLflow/Postgres tests (skipped unless the test URLs are set) |
 | `tests/e2e/` | Docker Compose tests (later waves) |
 
 ## Documentation
@@ -130,3 +150,4 @@ not secrets.
 - Architecture decisions: [`docs/decisions.md`](docs/decisions.md)
 - Dataset schema, generator, regimes, and versioning: [`docs/dataset.md`](docs/dataset.md)
 - Training pipeline, metrics, MLflow run schema, and evaluate workflow: [`docs/training.md`](docs/training.md)
+- Promotion gate, decisions, active pointer, and concurrency: [`docs/promotion.md`](docs/promotion.md)

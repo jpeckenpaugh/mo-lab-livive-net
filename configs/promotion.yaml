@@ -1,20 +1,31 @@
 # Candidate promotion policy (W3). Promotion is manual per ADR-002.
+# Floors are the W2-calibrated values recorded in ADR-010; do not weaken them.
 quality_floor:
   roc_auc: 0.83
   precision: 0.70
   recall: 0.65
   f1: 0.67
 
+# Maximum allowed drop versus the active model on the candidate's validation slice.
 regression_tolerance:
   roc_auc: 0.02
   precision: 0.02
   recall: 0.02
   f1: 0.02
 
+# Logical names are mapped to reality by the gate: "model" means the run has a
+# logged MLflow model; "evaluation.json" means the run artifact exists. The
+# dataset manifest lives in the dataset artifact, not in the run.
 required_artifacts:
   - model
-  - dataset_manifest
-  - evaluation_report
+  - evaluation.json
+
+registry:
+  registered_model_name: modelops-lab-classifier
+  alias: champion
+
+# ADR-011: candidates are compared against the active model on this slice.
+evaluation_split: validation
 
 auto_promote: false
 

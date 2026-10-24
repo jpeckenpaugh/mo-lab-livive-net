@@ -249,6 +249,7 @@ Config `configs/training.yaml`, synthetic `baseline`, seed 42, 2000 rows
 | Confusion matrix | tn 192, fp 40, fn 43, tp 125 |
 | Support / predictions positive | 168 / 165 |
 
-The quality floors in `configs/promotion.yaml` remain the W0 provisional values
-until the PM records the W2 recalibration (ADR-010). The calibrated proposal
-and its rationale are delivered in the W2 builder report, not applied here.
+The quality floors in `configs/promotion.yaml` are the W2-calibrated values
+recorded in ADR-010. W3 reads them at gate time and never hardcodes a threshold;
+the gate, decision record, and approved/rejected command sequences are
+documented in [`promotion.md`](promotion.md).
