@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "modelops-lab"
+version = "0.1.0"
+description = "Self-hosted reference implementation of a complete MLOps lifecycle"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "ModelOps Lab" }]
+dependencies = [
+    "alembic>=1.14",
+    "fastapi>=0.115",
+    "jinja2>=3.1",
+    "mlflow>=3.17,<4",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "prometheus-client>=0.21",
+    "psycopg[binary]>=3.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "pyyaml>=6.0",
+    "scikit-learn>=1.5",
+    "sqlalchemy>=2.0",
+    "typer>=0.12",
+    "uvicorn>=0.32",
+]
+
+[project.scripts]
+modelops = "modelops_lab.cli:app"
+
+[tool.uv]
+default-groups = ["dev"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/modelops_lab"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: requires real infrastructure such as PostgreSQL or MLflow",
+    "e2e: requires the Docker Compose stack",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+extend-exclude = ["contracts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.coverage.run]
+source = ["src/modelops_lab"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true

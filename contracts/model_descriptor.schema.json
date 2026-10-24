@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "ApprovalMetadata": {
+      "additionalProperties": false,
+      "description": "Record of the human approval that made an artifact servable.",
+      "properties": {
+        "approved_at": {
+          "format": "date-time",
+          "title": "Approved At",
+          "type": "string"
+        },
+        "approved_by": {
+          "minLength": 1,
+          "title": "Approved By",
+          "type": "string"
+        },
+        "decision_id": {
+          "description": "Promotion decision that authorized approval.",
+          "minLength": 1,
+          "title": "Decision Id",
+          "type": "string"
+        },
+        "reason": {
+          "minLength": 1,
+          "title": "Reason",
+          "type": "string"
+        },
+        "registry_alias": {
+          "description": "MLflow alias that marks the artifact.",
+          "minLength": 1,
+          "title": "Registry Alias",
+          "type": "string"
+        }
+      },
+      "required": [
+        "approved_by",
+        "approved_at",
+        "decision_id",
+        "reason",
+        "registry_alias"
+      ],
+      "title": "ApprovalMetadata",
+      "type": "object"
+    },
+    "ConfusionMatrix": {
+      "additionalProperties": false,
+      "description": "Binary confusion matrix counts at a fixed decision threshold.",
+      "properties": {
+        "false_negative": {
+          "minimum": 0,
+          "title": "False Negative",
+          "type": "integer"
+        },
+        "false_positive": {
+          "minimum": 0,
+          "title": "False Positive",
+          "type": "integer"
+        },
+        "true_negative": {
+          "minimum": 0,
+          "title": "True Negative",
+          "type": "integer"
+        },
+        "true_positive": {
+          "minimum": 0,
+          "title": "True Positive",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "true_negative",
+        "false_positive",
+        "false_negative",
+        "true_positive"
+      ],
+      "title": "ConfusionMatrix",
+      "type": "object"
+    },
+    "EvaluationMetrics": {
+      "additionalProperties": false,
+      "description": "Metrics and sample accounting for one evaluation partition.",
+      "properties": {
+        "accuracy": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Accuracy",
+          "type": "number"
+        },
+        "class_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Stringified observed label to row count.",
+          "minProperties": 1,
+          "title": "Class Counts",
+          "type": "object"
+        },
+        "confusion_matrix": {
+          "$ref": "#/$defs/ConfusionMatrix"
+        },
+        "f1": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "F1",
+          "type": "number"
+        },
+        "precision": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Precision",
+          "type": "number"
+        },
+        "recall": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Recall",
+          "type": "number"
+        },
+        "roc_auc": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Roc Auc",
+          "type": "number"
+        },
+        "sample_count": {
+          "description": "Rows included in this metric block.",
+          "minimum": 1,
+          "title": "Sample Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "roc_auc",
+        "precision",
+        "recall",
+        "f1",
+        "accuracy",
+        "sample_count",
+        "class_counts",
+        "confusion_matrix"
+      ],
+      "title": "EvaluationMetrics",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Everything needed to identify, audit, and load a trained model version.",
+  "properties": {
+    "approval": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ApprovalMetadata"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Absent for candidates that have not been approved for serving."
+    },
+    "artifact_uri": {
+      "description": "Resolvable MLflow artifact URI.",
+      "minLength": 1,
+      "title": "Artifact Uri",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dataset_fingerprint": {
+      "description": "Lowercase hexadecimal SHA-256 digest.",
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Dataset Fingerprint",
+      "type": "string"
+    },
+    "evaluation_split": {
+      "description": "Partition the metrics were computed on; promotion uses validation.",
+      "enum": [
+        "validation",
+        "test"
+      ],
+      "title": "Evaluation Split",
+      "type": "string"
+    },
+    "metrics": {
+      "$ref": "#/$defs/EvaluationMetrics"
+    },
+    "mlflow_run_id": {
+      "minLength": 1,
+      "title": "Mlflow Run Id",
+      "type": "string"
+    },
+    "model_version": {
+      "description": "Version label written to the registry.",
+      "minLength": 1,
+      "title": "Model Version",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "description": "Version of the contract schema that produced this record.",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "model_version",
+    "mlflow_run_id",
+    "dataset_fingerprint",
+    "artifact_uri",
+    "evaluation_split",
+    "metrics",
+    "created_at"
+  ],
+  "title": "ModelDescriptor",
+  "type": "object"
+}

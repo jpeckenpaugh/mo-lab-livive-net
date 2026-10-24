@@ -1,0 +1,379 @@
+{
+  "$defs": {
+    "DriftThresholds": {
+      "additionalProperties": false,
+      "description": "Thresholds used to produce this report, recorded for audit.",
+      "properties": {
+        "aggregate_feature_share_threshold": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Aggregate Feature Share Threshold",
+          "type": "number"
+        },
+        "ks_pvalue_threshold": {
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Ks Pvalue Threshold",
+          "type": "number"
+        },
+        "min_sample_size": {
+          "minimum": 1,
+          "title": "Min Sample Size",
+          "type": "integer"
+        },
+        "missing_rate_delta_threshold": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Missing Rate Delta Threshold",
+          "type": "number"
+        },
+        "performance_degradation_threshold": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute metric drop counted as degradation; null when performance was not evaluated.",
+          "title": "Performance Degradation Threshold"
+        },
+        "psi_threshold": {
+          "exclusiveMinimum": 0.0,
+          "title": "Psi Threshold",
+          "type": "number"
+        }
+      },
+      "required": [
+        "psi_threshold",
+        "ks_pvalue_threshold",
+        "missing_rate_delta_threshold",
+        "aggregate_feature_share_threshold",
+        "min_sample_size"
+      ],
+      "title": "DriftThresholds",
+      "type": "object"
+    },
+    "DriftVerdict": {
+      "description": "Verdict for a single monitored signal.\n\n``NOT_EVALUATED`` means the signal was out of scope for this report;\n``INSUFFICIENT_DATA`` means it was in scope but sample guards failed. They\nare deliberately distinct from ``NOT_DRIFTED``.",
+      "enum": [
+        "drifted",
+        "not_drifted",
+        "insufficient_data",
+        "not_evaluated"
+      ],
+      "title": "DriftVerdict",
+      "type": "string"
+    },
+    "FeatureDriftStatistic": {
+      "additionalProperties": false,
+      "description": "Per-feature distribution comparison against the reference window.",
+      "properties": {
+        "current_missing_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Current Missing Rate",
+          "type": "number"
+        },
+        "drifted": {
+          "description": "This feature's data-drift flag under the stated thresholds.",
+          "title": "Drifted",
+          "type": "boolean"
+        },
+        "feature": {
+          "minLength": 1,
+          "title": "Feature",
+          "type": "string"
+        },
+        "ks_pvalue": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Kolmogorov-Smirnov p-value, when computable.",
+          "title": "Ks Pvalue"
+        },
+        "ks_statistic": {
+          "anyOf": [
+            {
+              "maximum": 1.0,
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Kolmogorov-Smirnov statistic, when computable.",
+          "title": "Ks Statistic"
+        },
+        "psi": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Population Stability Index, when computable.",
+          "title": "Psi"
+        },
+        "reference_missing_rate": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Reference Missing Rate",
+          "type": "number"
+        }
+      },
+      "required": [
+        "feature",
+        "reference_missing_rate",
+        "current_missing_rate",
+        "drifted"
+      ],
+      "title": "FeatureDriftStatistic",
+      "type": "object"
+    },
+    "PerformanceSnapshot": {
+      "additionalProperties": false,
+      "description": "Delayed-label performance comparison for the current window.",
+      "properties": {
+        "current_value": {
+          "title": "Current Value",
+          "type": "number"
+        },
+        "delta": {
+          "description": "current_value minus reference_value.",
+          "title": "Delta",
+          "type": "number"
+        },
+        "labeled_sample_count": {
+          "description": "Current-window rows with ground-truth labels.",
+          "minimum": 0,
+          "title": "Labeled Sample Count",
+          "type": "integer"
+        },
+        "metric": {
+          "description": "Metric name, for example 'roc_auc'.",
+          "minLength": 1,
+          "title": "Metric",
+          "type": "string"
+        },
+        "reference_value": {
+          "title": "Reference Value",
+          "type": "number"
+        }
+      },
+      "required": [
+        "metric",
+        "reference_value",
+        "current_value",
+        "delta",
+        "labeled_sample_count"
+      ],
+      "title": "PerformanceSnapshot",
+      "type": "object"
+    },
+    "SignalVerdict": {
+      "additionalProperties": false,
+      "description": "Outcome and supporting context for one signal, kept independent of the others.",
+      "properties": {
+        "detail": {
+          "description": "Human-readable evidence for the verdict.",
+          "minLength": 1,
+          "title": "Detail",
+          "type": "string"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Test or comparison used, for example 'ks' or 'delayed_labels'.",
+          "title": "Method"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Signal-specific score. Its meaning is defined by method and must not be compared across signals.",
+          "title": "Score"
+        },
+        "verdict": {
+          "$ref": "#/$defs/DriftVerdict"
+        }
+      },
+      "required": [
+        "verdict",
+        "detail"
+      ],
+      "title": "SignalVerdict",
+      "type": "object"
+    },
+    "WindowSummary": {
+      "additionalProperties": false,
+      "description": "Description and sample count for a reference or current window.",
+      "properties": {
+        "end": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Window end; null when the window is not time-based.",
+          "title": "End"
+        },
+        "label": {
+          "description": "Whether this window is the baseline or the window under test.",
+          "enum": [
+            "reference",
+            "current"
+          ],
+          "title": "Label",
+          "type": "string"
+        },
+        "row_count": {
+          "description": "Rows observed in this window.",
+          "minimum": 0,
+          "title": "Row Count",
+          "type": "integer"
+        },
+        "source": {
+          "description": "Origin such as 'training_split' or 'prediction_events'.",
+          "minLength": 1,
+          "title": "Source",
+          "type": "string"
+        },
+        "start": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Window start; null when the window is not time-based.",
+          "title": "Start"
+        }
+      },
+      "required": [
+        "label",
+        "source",
+        "row_count"
+      ],
+      "title": "WindowSummary",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Reference-versus-current monitoring report.\n\nData drift, concept drift, and observed performance degradation are three\nseparate fields with independent verdicts. A drifted feature distribution\nnever forces a performance verdict, and missing labels never imply that\nconcept drift was absent.",
+  "properties": {
+    "concept_drift": {
+      "$ref": "#/$defs/SignalVerdict"
+    },
+    "current_window": {
+      "$ref": "#/$defs/WindowSummary"
+    },
+    "data_drift": {
+      "$ref": "#/$defs/SignalVerdict"
+    },
+    "feature_statistics": {
+      "items": {
+        "$ref": "#/$defs/FeatureDriftStatistic"
+      },
+      "title": "Feature Statistics",
+      "type": "array"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "title": "Generated At",
+      "type": "string"
+    },
+    "model_version": {
+      "description": "Model version monitored in the current window.",
+      "minLength": 1,
+      "title": "Model Version",
+      "type": "string"
+    },
+    "performance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PerformanceSnapshot"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Delayed-label comparison; present only when performance was evaluated."
+    },
+    "performance_degradation": {
+      "$ref": "#/$defs/SignalVerdict"
+    },
+    "reference_window": {
+      "$ref": "#/$defs/WindowSummary"
+    },
+    "report_id": {
+      "minLength": 1,
+      "title": "Report Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "description": "Version of the contract schema that produced this record.",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "thresholds": {
+      "$ref": "#/$defs/DriftThresholds"
+    }
+  },
+  "required": [
+    "report_id",
+    "generated_at",
+    "model_version",
+    "reference_window",
+    "current_window",
+    "thresholds",
+    "data_drift",
+    "concept_drift",
+    "performance_degradation"
+  ],
+  "title": "DriftReport",
+  "type": "object"
+}

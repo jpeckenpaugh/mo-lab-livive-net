@@ -1,0 +1,159 @@
+{
+  "$defs": {
+    "JsonValue": {},
+    "SplitManifest": {
+      "additionalProperties": false,
+      "description": "Fingerprint and class balance for one deterministic dataset partition.",
+      "properties": {
+        "class_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Stringified target label to row count, including zero counts when known.",
+          "minProperties": 1,
+          "title": "Class Counts",
+          "type": "object"
+        },
+        "fingerprint": {
+          "description": "SHA-256 of the canonical serialized rows in this partition.",
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fingerprint",
+          "type": "string"
+        },
+        "name": {
+          "enum": [
+            "train",
+            "validation",
+            "test"
+          ],
+          "title": "Name",
+          "type": "string"
+        },
+        "row_count": {
+          "description": "Number of rows in this partition.",
+          "minimum": 1,
+          "title": "Row Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "row_count",
+        "fingerprint",
+        "class_counts"
+      ],
+      "title": "SplitManifest",
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Immutable record of a generated or loaded dataset and its split manifest.\n\n``fingerprint`` covers the complete dataset; each split carries its own\nfingerprint so later waves can detect accidental re-partitioning.",
+  "properties": {
+    "created_at": {
+      "description": "Time the dataset version was prepared.",
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "data_schema_version": {
+      "description": "Version of the feature/target column schema, distinct from the contract version.",
+      "minLength": 1,
+      "title": "Data Schema Version",
+      "type": "string"
+    },
+    "dataset_version": {
+      "description": "Human-readable dataset version.",
+      "minLength": 1,
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "feature_names": {
+      "description": "Ordered model input column names.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Feature Names",
+      "type": "array"
+    },
+    "fingerprint": {
+      "description": "SHA-256 of the complete dataset.",
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Fingerprint",
+      "type": "string"
+    },
+    "generator_parameters": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "description": "Source-specific parameters needed to reproduce the dataset.",
+      "title": "Generator Parameters",
+      "type": "object"
+    },
+    "row_count": {
+      "description": "Total rows across all splits.",
+      "minimum": 1,
+      "title": "Row Count",
+      "type": "integer"
+    },
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "description": "Version of the contract schema that produced this record.",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "seed": {
+      "description": "Seed used for data generation or sampling.",
+      "minimum": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "source_kind": {
+      "description": "Generator or loader that produced the data.",
+      "enum": [
+        "synthetic",
+        "breast_cancer"
+      ],
+      "title": "Source Kind",
+      "type": "string"
+    },
+    "split_seed": {
+      "description": "Seed used to assign rows to splits.",
+      "minimum": 0,
+      "title": "Split Seed",
+      "type": "integer"
+    },
+    "splits": {
+      "description": "Train, validation, and test splits.",
+      "items": {
+        "$ref": "#/$defs/SplitManifest"
+      },
+      "minItems": 3,
+      "title": "Splits",
+      "type": "array"
+    },
+    "target_name": {
+      "description": "Target column name.",
+      "minLength": 1,
+      "title": "Target Name",
+      "type": "string"
+    }
+  },
+  "required": [
+    "dataset_version",
+    "source_kind",
+    "seed",
+    "split_seed",
+    "data_schema_version",
+    "row_count",
+    "fingerprint",
+    "feature_names",
+    "target_name",
+    "splits",
+    "created_at"
+  ],
+  "title": "DatasetManifest",
+  "type": "object"
+}

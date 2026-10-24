@@ -1,0 +1,24 @@
+# Inputs for the reproducible baseline training pipeline (W2).
+# The synthetic generator is the primary workload per ADR-001.
+dataset:
+  kind: synthetic
+  seed: 42
+  n_samples: 2000
+
+split:
+  seed: 42
+  train_fraction: 0.6
+  validation_fraction: 0.2
+  test_fraction: 0.2
+
+model:
+  type: logistic_regression
+  random_state: 42
+  hyperparameters:
+    C: 1.0
+    max_iter: 1000
+    solver: lbfgs
+
+tracking:
+  uri: http://localhost:5000
+  experiment_name: modelops-lab

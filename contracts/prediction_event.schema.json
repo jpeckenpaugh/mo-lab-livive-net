@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One inference request with the version and latency needed to audit serving.",
+  "properties": {
+    "features": {
+      "additionalProperties": {
+        "type": "number"
+      },
+      "description": "Validated model input features keyed by training column name.",
+      "minProperties": 1,
+      "title": "Features",
+      "type": "object"
+    },
+    "latency_ms": {
+      "description": "Server-side inference latency in milliseconds.",
+      "minimum": 0.0,
+      "title": "Latency Ms",
+      "type": "number"
+    },
+    "model_version": {
+      "description": "Approved model version that served the request.",
+      "minLength": 1,
+      "title": "Model Version",
+      "type": "string"
+    },
+    "prediction": {
+      "description": "Binary class label returned to the caller.",
+      "enum": [
+        0,
+        1
+      ],
+      "title": "Prediction",
+      "type": "integer"
+    },
+    "probability": {
+      "description": "Probability assigned to the positive class.",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Probability",
+      "type": "number"
+    },
+    "request_id": {
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0.0",
+      "default": "1.0.0",
+      "description": "Version of the contract schema that produced this record.",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "timestamp": {
+      "description": "UTC-aware time the request was handled.",
+      "format": "date-time",
+      "title": "Timestamp",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "timestamp",
+    "features",
+    "prediction",
+    "probability",
+    "model_version",
+    "latency_ms"
+  ],
+  "title": "PredictionEvent",
+  "type": "object"
+}

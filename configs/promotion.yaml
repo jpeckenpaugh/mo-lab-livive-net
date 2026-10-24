@@ -1,0 +1,24 @@
+# Candidate promotion policy (W3). Promotion is manual per ADR-002.
+quality_floor:
+  roc_auc: 0.85
+  precision: 0.75
+  recall: 0.75
+  f1: 0.75
+
+regression_tolerance:
+  roc_auc: 0.02
+  precision: 0.02
+  recall: 0.02
+  f1: 0.02
+
+required_artifacts:
+  - model
+  - dataset_manifest
+  - evaluation_report
+
+auto_promote: false
+
+smoke_test:
+  enabled: true
+  sample_count: 5
+  max_latency_ms: 1000.0

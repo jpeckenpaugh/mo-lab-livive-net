@@ -140,3 +140,50 @@ and the heavier tiers on the integration job.
 **Consequences:** Domain logic must be injectable so unit tests can avoid
 infrastructure.
 **Revisit if:** Integration coverage becomes cheap enough to run everywhere.
+
+---
+
+## ADR-009 — Contract schema versioning
+
+**Date:** 2026-10-24
+**Status:** Accepted
+**Context:** The five frozen contracts carry `schema_version`. Without a rule,
+field changes could silently invalidate stored manifests, decisions, and
+events.
+**Decision:** Contract fields are frozen at `1.0.0`. Removing, renaming,
+retyping, or making an optional field required is a **major** bump. Adding a
+new optional field is a **minor** bump. Documentation-only edits are a patch.
+Every bump is recorded here and regenerated schemas are committed; the
+byte-comparison test enforces the checked-in state.
+**Rationale:** Promotion decisions and drift reports are audit artifacts; a
+stable, explicit version is how a reader knows which fields to trust.
+**Consequences:** Later waves must not edit a frozen contract casually. If a
+field is missing during implementation, raise it to the PM rather than
+mutating `1.0.0`.
+
+---
+
+## ADR-010 — Gate semantics and threshold calibration
+
+**Date:** 2026-10-24
+**Status:** Accepted
+**Context:** W0 shipped provisional quality floors (ROC-AUC 0.85, P/R/F1 0.75,
+tolerance 0.02) before any model was measured. Three related semantics needed
+a ruling.
+**Decision:**
+1. The floors are **provisional** and must be recalibrated in W2 against the
+   measured baseline, with the change recorded in this log.
+2. A human may **reject an all-pass candidate** by supplying a reason. The
+   verdict stays binary; the audit trail carries the rationale.
+3. `auto_promote: true` is **rejected by validation** until automated promotion
+   is implemented. The flag documents intent without implying capability.
+4. Concept-drift and performance thresholds are **designed in W5**, not
+   guessed now. A signal without labels must report `not_evaluated`, never
+   `not_drifted`.
+**Rationale:** Honest defaults beat plausible-looking numbers, and the
+distinction between "no drift observed" and "not measured" is central to the
+concept's warning against inferring degradation from drift.
+**Consequences:** W2 and W5 own explicit threshold-calibration tasks. W3's
+promotion output is only meaningful after W2 updates the floors.
+
+

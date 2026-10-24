@@ -1,0 +1,19 @@
+# Drift monitoring policy (W5). The reference window fits inside the 1200-row
+# training split produced by the defaults in training.yaml.
+reference:
+  source: training_split
+  window_size: 1000
+
+current:
+  window_size: 500
+
+min_sample_size: 100
+
+feature_drift:
+  psi_threshold: 0.2
+  ks_pvalue_threshold: 0.05
+  missing_rate_delta_threshold: 0.05
+
+aggregate_feature_share_threshold: 0.3
+
+report_output_dir: reports/drift

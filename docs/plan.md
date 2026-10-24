@@ -68,6 +68,18 @@ consume these; changes require a PM decision and a version bump.
    per-feature statistics, thresholds, and three independent verdicts:
    data drift, concept drift, observed performance degradation.
 
+## Carried obligations
+
+Commitments made now that must be discharged by a later wave.
+
+| Wave | Obligation | Source |
+|---|---|---|
+| W1 | Manifest records provenance for both the generator and the optional real loader | ADR-001 |
+| W2 | Measure the baseline, recalibrate the provisional quality floors, record the change | ADR-010 |
+| W3 | Gate uses the calibrated floors; tests cover human rejection of an all-pass candidate | ADR-010 |
+| W5 | Define concept-drift and performance-degradation thresholds; absent labels → `not_evaluated` | ADR-010 |
+| W7 | Choose and add the repository license before any public announcement | PM open item |
+
 ## Verification model
 
 - **Builder → self-review → PM.** Each wave runs as: PM writes the task spec →
