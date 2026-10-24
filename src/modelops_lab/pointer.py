@@ -248,11 +248,12 @@ class PointerStore:
             if self._is_postgres:
                 connection.execute(
                     text(
-                        "TRUNCATE TABLE prediction_events, promotion_decisions, "
-                        "model_transitions, active_model"
+                        "TRUNCATE TABLE prediction_labels, prediction_events, "
+                        "promotion_decisions, model_transitions, active_model"
                     )
                 )
             else:
+                connection.execute(text("DELETE FROM prediction_labels"))
                 connection.execute(text("DELETE FROM prediction_events"))
                 connection.execute(text("DELETE FROM promotion_decisions"))
                 connection.execute(text("DELETE FROM model_transitions"))

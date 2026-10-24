@@ -1581,6 +1581,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "mlflow" },
     { name = "numpy" },
@@ -1591,6 +1592,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "sqlalchemy" },
     { name = "typer" },
     { name = "uvicorn" },
@@ -1598,7 +1600,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -1608,6 +1609,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "mlflow", specifier = ">=3.17,<4" },
     { name = "numpy", specifier = ">=1.26" },
@@ -1618,6 +1620,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "scikit-learn", specifier = ">=1.5" },
+    { name = "scipy", specifier = ">=1.14" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", specifier = ">=0.32" },
@@ -1625,7 +1628,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.27" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "pytest-cov", specifier = ">=6.0" },
     { name = "ruff", specifier = ">=0.8" },

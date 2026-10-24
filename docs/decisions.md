@@ -316,3 +316,42 @@ header. Duplicate request IDs produce distinct events.
 row; retries are normal and must not erase monitoring data.
 **Consequences:** Exactly-once event semantics are explicitly out of scope.
 W5 queries work on events, not on request identity.
+
+---
+
+## ADR-015 — Monitoring verdict semantics
+
+**Date:** 2026-10-24
+**Status:** Accepted
+**Context:** W5 had to report data drift, concept drift, and observed performance
+degradation without inferring one from another. The existing `improved_signal`
+regime makes an old model perform *better*, so it cannot supply evidence of
+concept drift.
+**Decision:**
+1. Add a `concept_shift` regime: identical feature draws to `baseline`, with a
+   rotated label mechanism that makes a baseline-trained model degrade by more
+   than 0.05 ROC-AUC. This is concept drift with stable inputs.
+2. Reference window = the active model's own dataset, validation split; current
+   window = the most recent events for the active model version.
+3. Data drift uses per-feature PSI and KS (numeric) or categorical PSI, plus
+   missing-rate deltas, with an aggregate share threshold. Insufficient samples
+   yield `insufficient_data`, never `not_drifted`.
+4. Performance degradation requires delayed labels, compares ROC-AUC against the
+   same model on the reference split, and applies a configured maximum drop and
+   minimum labeled sample count.
+5. Concept drift is asserted only when performance degrades while data drift is
+   **not** flagged. When both are present the verdict is `not_evaluated` with a
+   detail saying the cause is confounded; when labels are absent it is
+   `not_evaluated`.
+6. If the model cannot be loaded, the report is still written with data drift
+   evaluated and both dependent verdicts `not_evaluated`, naming the operator
+   error without secrets or a traceback.
+**Rationale:** A covariate shift changes the input distribution and can degrade
+performance without changing P(y|X). Reporting that as concept drift would
+violate the concept's central warning. Requiring stable inputs before asserting
+concept drift keeps the three signals honest and demonstrable.
+**Consequences:** The demo shows three distinct evidence patterns. Event
+retention pruning deletes labels for deleted events only. The status page is
+generated, read-only, and never a control surface.
+**Revisit if:** A reweighted or stratified concept-drift test replaces the
+stable-input rule.

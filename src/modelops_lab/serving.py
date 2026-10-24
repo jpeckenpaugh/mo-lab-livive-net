@@ -41,12 +41,13 @@ from prometheus_client import (
     Histogram,
     generate_latest,
 )
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from modelops_lab.config import RuntimeSettings, load_promotion_config, load_runtime_settings
 from modelops_lab.contracts import PredictionEvent
-from modelops_lab.db import PredictionEventRow, create_engine_for
+from modelops_lab.db import PredictionEventRow, PredictionLabelRow, create_engine_for
 from modelops_lab.pointer import ActiveModel, DecisionRecord, PointerStore
 from modelops_lab.registry import MlflowModelRegistry
 
@@ -238,7 +239,8 @@ def validate_features(payload: Mapping[str, Any], spec: FeatureSpec) -> dict[str
 class PredictionEventRepository(Protocol):
     """Minimal sink for served predictions; failures must never fail inference."""
 
-    def record(self, event: PredictionEvent) -> None: ...
+    def record(self, event: PredictionEvent) -> int | None:
+        """Persist the event and return its identity, or ``None`` when unknown."""
 
     def ping(self) -> bool: ...
 
@@ -261,20 +263,21 @@ class SqlPredictionEventStore:
                 )
             return self._session_factory
 
-    def record(self, event: PredictionEvent) -> None:
+    def record(self, event: PredictionEvent) -> int:
         session_factory = self._ensure_engine()
         with session_factory() as session, session.begin():
-            session.add(
-                PredictionEventRow(
-                    request_id=event.request_id,
-                    timestamp=event.timestamp,
-                    features=event.features,
-                    prediction=event.prediction,
-                    probability=event.probability,
-                    model_version=event.model_version,
-                    latency_ms=event.latency_ms,
-                )
+            row = PredictionEventRow(
+                request_id=event.request_id,
+                timestamp=event.timestamp,
+                features=event.features,
+                prediction=event.prediction,
+                probability=event.probability,
+                model_version=event.model_version,
+                latency_ms=event.latency_ms,
             )
+            session.add(row)
+            session.flush()
+            return int(row.event_id)
 
     def ping(self) -> bool:
         try:
@@ -284,6 +287,83 @@ class SqlPredictionEventStore:
             return True
         except Exception:
             return False
+
+
+class UnknownEventError(LookupError):
+    """Raised when a label references an event that does not exist."""
+
+    def __init__(self, event_id: int) -> None:
+        self.event_id = event_id
+        super().__init__(f"prediction event {event_id} does not exist")
+
+
+@dataclass(frozen=True)
+class LabelRecord:
+    """Result of one idempotent label upsert."""
+
+    event_id: int
+    label: int
+    labeled_at: datetime
+    updated: bool
+
+
+class LabelRepository(Protocol):
+    """Delayed-label sink used by ``POST /labels``."""
+
+    def upsert(self, event_id: int, label: int) -> LabelRecord: ...
+
+
+class SqlPredictionLabelStore:
+    """Postgres/SQLite-backed upsert for ``prediction_labels``."""
+
+    def __init__(self, database_url: str) -> None:
+        self.database_url = database_url
+        self._engine = None
+        self._session_factory: sessionmaker[Session] | None = None
+        self._lock = Lock()
+
+    def _ensure_engine(self) -> sessionmaker[Session]:
+        with self._lock:
+            if self._session_factory is None:
+                self._engine = create_engine_for(self.database_url)
+                self._session_factory = sessionmaker(
+                    bind=self._engine, expire_on_commit=False, future=True
+                )
+            return self._session_factory
+
+    def upsert(self, event_id: int, label: int) -> LabelRecord:
+        session_factory = self._ensure_engine()
+        labeled_at = datetime.now(UTC)
+        with session_factory() as session, session.begin():
+            event = session.get(PredictionEventRow, event_id)
+            if event is None:
+                raise UnknownEventError(event_id)
+            row = session.get(PredictionLabelRow, event_id)
+            if row is None:
+                row = PredictionLabelRow(event_id=event_id, label=label, labeled_at=labeled_at)
+                session.add(row)
+                return LabelRecord(
+                    event_id=event_id, label=label, labeled_at=labeled_at, updated=False
+                )
+            row.label = label
+            row.labeled_at = labeled_at
+            return LabelRecord(event_id=event_id, label=label, labeled_at=labeled_at, updated=True)
+
+
+class LabelRequest(BaseModel):
+    """Strict ``POST /labels`` body: integer event identity and a 0/1 label."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: int = Field(gt=0, strict=True)
+    label: int = Field(strict=True)
+
+    @field_validator("label")
+    @classmethod
+    def _binary_label(cls, value: int) -> int:
+        if value not in (0, 1):
+            raise ValueError("label must be 0 or 1")
+        return value
 
 
 # ---------------------------------------------------------------------------
@@ -676,6 +756,7 @@ def create_app(
     settings: RuntimeSettings | None = None,
     provider: PointerModelProvider | None = None,
     event_store: PredictionEventRepository | None = None,
+    label_store: LabelRepository | None = None,
     metrics: ServingMetrics | None = None,
     logger: logging.Logger | None = None,
 ) -> FastAPI:
@@ -684,6 +765,7 @@ def create_app(
     log = logger or LOGGER
     serving_metrics = metrics or ServingMetrics()
     store = event_store or SqlPredictionEventStore(runtime.database_url)
+    labels = label_store or SqlPredictionLabelStore(runtime.database_url)
     active_provider = provider or _resolve_default_provider(runtime, serving_metrics, store)
 
     app = FastAPI(
@@ -694,6 +776,7 @@ def create_app(
     app.state.settings = runtime
     app.state.provider = active_provider
     app.state.event_store = store
+    app.state.label_store = labels
     app.state.metrics = serving_metrics
 
     @app.get("/health")
@@ -850,7 +933,9 @@ def create_app(
         prediction = int(probability >= DEFAULT_DECISION_THRESHOLD)
 
         # Event logging is explicitly best-effort: a database failure must not
-        # change the inference response the caller receives.
+        # change the inference response the caller receives. The response still
+        # carries a null event_id so the caller can tell labeling is impossible.
+        event_id: int | None = None
         try:
             event = PredictionEvent(
                 request_id=request_id,
@@ -861,7 +946,7 @@ def create_app(
                 model_version=version,
                 latency_ms=latency_ms,
             )
-            store.record(event)
+            event_id = store.record(event)
             serving_metrics.events.labels(outcome="logged").inc()
         except Exception as exc:
             serving_metrics.event_failures.inc()
@@ -893,11 +978,36 @@ def create_app(
             status_code=200,
             content={
                 "request_id": request_id,
+                "event_id": event_id,
                 "model_version": version,
                 "prediction": prediction,
                 "probability": probability,
             },
             headers={"X-Request-ID": request_id},
+        )
+
+    @app.post("/labels")
+    def label(payload: LabelRequest) -> JSONResponse:
+        """Attach or replace delayed ground truth for one prediction event."""
+        try:
+            record = labels.upsert(payload.event_id, payload.label)
+        except UnknownEventError:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "unknown_event",
+                    "message": f"prediction event {payload.event_id} does not exist",
+                    "event_id": payload.event_id,
+                },
+            ) from None
+        return JSONResponse(
+            status_code=200,
+            content={
+                "event_id": record.event_id,
+                "label": record.label,
+                "labeled_at": record.labeled_at.isoformat(),
+                "updated": record.updated,
+            },
         )
 
     @app.get("/metrics")

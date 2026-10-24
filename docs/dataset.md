@@ -3,7 +3,7 @@
 ModelOps Lab's primary workload is a seeded synthetic tabular binary
 classification dataset (ADR-001). A bundled real loader is available as an
 alternate source. This document describes the schema, the generator math, the
-three regimes, the canonical serialization and fingerprint scheme, and the
+four regimes, the canonical serialization and fingerprint scheme, and the
 provenance of the optional loader.
 
 ## Declared schema
@@ -95,7 +95,7 @@ covariate-shift regimes.
 
 ## Regimes
 
-A regime changes either `P(X)` or `P(y|X)`, never both. All three emit the same
+A regime changes either `P(X)` or `P(y|X)`, never both. All four emit the same
 schema and are recorded in `DatasetManifest.generator_parameters` (including
 the numeric distribution, categorical probabilities, coefficients, link
 temperature, and standardization constants).
@@ -104,7 +104,8 @@ temperature, and standardization constants).
 |---|---|---|---|
 | `baseline` | nothing (reference) | — | reference distribution and label mechanism |
 | `covariate_shift` | numeric means/scales and categorical proportions | latent coefficients, standardization, logistic link | **data drift** with unchanged `P(y|X)` |
-| `improved_signal` | label coefficients (reweighted and enlarged) and link temperature | feature draws (identical to baseline) | **concept drift** with unchanged `P(X)` |
+| `improved_signal` | label coefficients (reweighted and enlarged) and link temperature | feature draws (identical to baseline) | a genuinely better model on the same rows |
+| `concept_shift` | label coefficients (strongest predictors inverted) and intercept | feature draws (identical to baseline) | **concept drift** with stable inputs |
 
 ### `covariate_shift`
 
@@ -150,6 +151,34 @@ same rows.
 Measured on the same `seed=42` validation slice: a model trained on
 `improved_signal` reaches ROC-AUC **0.9418**, while the baseline-trained model
 reaches **0.8871** — a **+0.0547** delta.
+
+### `concept_shift`
+
+`P(X)` is held fixed: for a given seed the feature rows (numeric and
+categorical) are byte-identical to baseline. The label mechanism changes so
+the model's ranking degrades while the inputs look normal:
+
+- the strongest baseline predictors change direction: `age`, `systolic_bp`,
+  `glucose`, and `st_depression` become negative, and `max_heart_rate`
+  becomes positive;
+- weaker predictors keep their baseline weights;
+- the intercept moves from −0.75 to −1.0 so the base rate stays near 0.34,
+  inside the declared `[0.20, 0.60]` gate.
+
+This is concept drift, not covariate shift: a model trained on baseline sees
+the same score inputs but the labels now point the other way. Measured with
+`seed=42`:
+
+- target base rate 0.3445 (baseline 0.4075);
+- baseline-trained model ROC-AUC 0.3300 on the shifted validation slice,
+  a **−0.5399** change from 0.8699 on the baseline slice;
+- a model retrained on `concept_shift` reaches **0.8377**, recovering the new
+  relationship.
+
+Unlike `improved_signal`, this regime deliberately makes a model *worse*; it
+exists so W5 can demonstrate concept drift with stable inputs and contrast it
+with `covariate_shift` (data drift with unchanged `P(y|X)`). See
+[`monitoring.md`](monitoring.md#the-three-verdicts).
 
 ## Splits
 
@@ -240,7 +269,7 @@ it does not print a traceback for user data errors.
 
 ```bash
 modelops data prepare --config configs/training.yaml \
-  [--regime baseline|covariate_shift|improved_signal] \
+  [--regime baseline|covariate_shift|improved_signal|concept_shift] \
   [--out artifacts/datasets] [--force]
 
 modelops data validate artifacts/datasets/synthetic-v1.0.0-<fingerprint>

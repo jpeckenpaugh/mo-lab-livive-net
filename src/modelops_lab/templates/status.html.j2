@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ModelOps Lab status</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           margin: 0 auto; max-width: 1100px; padding: 2rem; line-height: 1.5; }
+    h1, h2 { line-height: 1.2; }
+    h1 { margin-bottom: 0.25rem; }
+    .muted { color: #6b7280; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; }
+    .card { border: 1px solid #d1d5db; border-radius: 8px; padding: 1rem; }
+    .big { font-size: 1.5rem; font-weight: 700; margin: 0.25rem 0; }
+    .drifted { color: #b91c1c; }
+    .not-drifted { color: #047857; }
+    .insufficient-data, .not-evaluated { color: #92400e; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.92rem; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 0.45rem 0.5rem; text-align: left; vertical-align: top; }
+    th { background: rgba(127, 127, 127, 0.12); }
+    code { font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>ModelOps Lab status</h1>
+  <p class="muted">Generated {{ status.generated_at }}. Static artifact; no controls.</p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Active model</h2>
+      {% if status.active %}
+      <p class="big">{{ status.active.model_name }} v{{ status.active.model_version }}</p>
+      <p class="muted">
+        run <code>{{ status.active.mlflow_run_id }}</code><br>
+        dataset <code>{{ status.active.dataset_version }}</code><br>
+        promoted {{ status.active.promoted_at }}
+      </p>
+      {% else %}
+      <p class="big">none</p>
+      <p class="muted">No model has been promoted.</p>
+      {% endif %}
+    </section>
+    <section class="card">
+      <h2>Approval</h2>
+      {% if status.approval %}
+      <p class="big">{{ status.approval.verdict }}</p>
+      <p>{{ status.approval.reason }}</p>
+      <p class="muted">
+        <code>{{ status.approval.decision_id }}</code> by {{ status.approval.actor }}
+        on {{ status.approval.decided_at }}
+      </p>
+      {% else %}
+      <p class="muted">No authorizing decision recorded.</p>
+      {% endif %}
+    </section>
+    <section class="card">
+      <h2>Events</h2>
+      <p class="big">{{ status.event_counts.total }}</p>
+      <p class="muted">
+        {% for version, count in status.event_counts.by_model_version.items() %}
+        version {{ version }}: {{ count }}{% if not loop.last %}, {% endif %}
+        {% else %}
+        no prediction events
+        {% endfor %}
+      </p>
+    </section>
+  </div>
+
+  <h2>Latest drift verdicts</h2>
+  {% if status.reports %}
+  <table>
+    <tr>
+      <th>Generated</th><th>Model</th><th>Data drift</th>
+      <th>Performance</th><th>Concept drift</th><th>Rows (labeled)</th><th>Report</th>
+    </tr>
+    {% for report in status.reports %}
+    <tr>
+      <td>{{ report.generated_at }}</td>
+      <td>{{ report.model_version }}</td>
+      <td class="{{ report.data_drift|replace('_', '-') }}">{{ report.data_drift }}</td>
+      <td class="{{ report.performance_degradation|replace('_', '-') }}">{{ report.performance_degradation }}</td>
+      <td class="{{ report.concept_drift|replace('_', '-') }}">{{ report.concept_drift }}</td>
+      <td>{{ report.current_rows }} ({{ report.labeled_rows }})</td>
+      <td><code>{{ report.json_path }}</code><br><code>{{ report.html_path }}</code></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No drift reports found in <code>{{ status.report_dir }}</code>.</p>
+  {% endif %}
+
+  <h2>Recent transitions</h2>
+  {% if status.transitions %}
+  <table>
+    <tr><th>When</th><th>Operation</th><th>From</th><th>To</th><th>Actor</th><th>Reason</th></tr>
+    {% for transition in status.transitions %}
+    <tr>
+      <td>{{ transition.occurred_at }}</td>
+      <td>{{ transition.operation }}</td>
+      <td>{{ transition.from_model_version or "none" }}</td>
+      <td>{{ transition.to_model_version }}</td>
+      <td>{{ transition.actor }}</td>
+      <td>{{ transition.reason }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No transitions recorded.</p>
+  {% endif %}
+
+  <h2>Recent decisions</h2>
+  {% if status.decisions %}
+  <table>
+    <tr><th>When</th><th>Decision</th><th>Candidate</th><th>Before</th><th>Verdict</th><th>Actor</th><th>Reason</th></tr>
+    {% for decision in status.decisions %}
+    <tr>
+      <td>{{ decision.decided_at }}</td>
+      <td><code>{{ decision.decision_id }}</code></td>
+      <td>{{ decision.candidate_model_version }}</td>
+      <td>{{ decision.active_model_version_before or "none" }}</td>
+      <td>{{ decision.verdict }}</td>
+      <td>{{ decision.actor }}</td>
+      <td>{{ decision.reason }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No promotion decisions recorded.</p>
+  {% endif %}
+</body>
+</html>

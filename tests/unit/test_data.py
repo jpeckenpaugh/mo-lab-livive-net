@@ -293,6 +293,36 @@ def test_improved_signal_beats_a_baseline_model_on_the_same_slice() -> None:
     assert improved_model_auc - baseline_model_auc >= 0.02
 
 
+def test_concept_shift_holds_features_fixed_and_moves_the_label_mechanism() -> None:
+    baseline = generate_synthetic(2000, seed=42, regime="baseline")
+    concept = generate_synthetic(2000, seed=42, regime="concept_shift")
+
+    # P(X) is identical: only P(y|X) changes.
+    assert_frame_equal(
+        baseline.drop(columns="target"), concept.drop(columns="target"), check_exact=True
+    )
+    assert not np.array_equal(
+        label_probabilities(baseline, "baseline"),
+        label_probabilities(baseline, "concept_shift"),
+    )
+    assert 0.20 <= float(concept["target"].mean()) <= 0.60
+
+    splits = assign_splits(baseline["row_id"].to_numpy(), TRAINING.split)
+    concept_splits = assign_splits(concept["row_id"].to_numpy(), TRAINING.split)
+    baseline_model = fit_and_score(
+        subset(baseline, splits["train"]), subset(baseline, splits["validation"])
+    )
+    degraded = fit_and_score(
+        subset(baseline, splits["train"]), subset(concept, concept_splits["validation"])
+    )
+    recovered = fit_and_score(
+        subset(concept, concept_splits["train"]), subset(concept, concept_splits["validation"])
+    )
+
+    assert baseline_model - degraded >= 0.05
+    assert recovered >= 0.75
+
+
 def test_covariate_shift_moves_several_features_but_not_the_mechanism() -> None:
     baseline = generate_synthetic(2000, seed=42, regime="baseline")
     shifted = generate_synthetic(2000, seed=42, regime="covariate_shift")

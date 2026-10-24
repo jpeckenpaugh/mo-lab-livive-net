@@ -5,7 +5,7 @@ numeric features, categorical features, and a binary label from a logistic
 function of a latent linear score. The label is *sampled*, so the target is
 noisy rather than a deterministic threshold on the score.
 
-Three regimes share one schema:
+Four regimes share one schema:
 
 ``baseline``
     Reference distribution and reference label mechanism.
@@ -17,6 +17,11 @@ Three regimes share one schema:
     ``P(X)`` is byte-for-byte the baseline draws; the label mechanism changes
     (reweighted, larger coefficients and a sharper link), so a model trained on
     this regime can genuinely beat a baseline-trained model on the same rows.
+``concept_shift``
+    ``P(X)`` is byte-for-byte the baseline draws; the label mechanism inverts
+    the strongest predictors and adjusts the intercept. Same inputs, different
+    input-output relationship: a baseline-trained model degrades sharply while
+    a model trained on the shifted labels recovers.
 
 Artifacts are written as::
 
@@ -58,8 +63,13 @@ from modelops_lab.dataset_schema import (
 )
 from modelops_lab.validation import DatasetValidationError, read_dataset_csv, validate_dataset
 
-Regime = Literal["baseline", "covariate_shift", "improved_signal"]
-REGIMES: tuple[Regime, ...] = ("baseline", "covariate_shift", "improved_signal")
+Regime = Literal["baseline", "covariate_shift", "improved_signal", "concept_shift"]
+REGIMES: tuple[Regime, ...] = (
+    "baseline",
+    "covariate_shift",
+    "improved_signal",
+    "concept_shift",
+)
 SPLIT_NAMES: tuple[str, str, str] = ("train", "validation", "test")
 DEFAULT_DATASET_ROOT = Path("artifacts/datasets")
 
@@ -219,6 +229,28 @@ def _improved_coefficients() -> dict[str, float]:
 
 _IMPROVED_COEFFICIENTS = _improved_coefficients()
 
+# Concept drift: the feature distribution is untouched, but the relationship
+# between inputs and the label is inverted for the strongest baseline
+# predictors. Reversing ranking this way is a genuine P(y|X) change: a
+# baseline-trained model's scores anti-correlate with the shifted labels, and
+# retraining on the shifted data recovers the new relationship. Only the
+# direction changes (not a monotone rescale), so ROC-AUC must move.
+_CONCEPT_COEFFICIENTS: dict[str, float] = {
+    "age": -0.825,
+    "bmi": 0.42,
+    "systolic_bp": -0.48,
+    "diastolic_bp": 0.12,
+    "cholesterol": 0.45,
+    "glucose": -0.63,
+    "resting_heart_rate": 0.18,
+    "max_heart_rate": 0.48,
+    "st_depression": -0.72,
+    "exercise_minutes": -0.33,
+}
+# Lowered from -0.75 to keep the target base rate near 0.37, comfortably inside
+# the declared [0.20, 0.60] validation gate.
+_CONCEPT_INTERCEPT = -1.0
+
 
 def label_probabilities(frame: pd.DataFrame, regime: Regime) -> np.ndarray:
     """Return ``P(y=1|X)`` for ``frame`` under ``regime``.
@@ -232,14 +264,21 @@ def label_probabilities(frame: pd.DataFrame, regime: Regime) -> np.ndarray:
         coefficients = _IMPROVED_COEFFICIENTS
         categorical_scale = _IMPROVED_CATEGORICAL_SCALE
         temperature = _IMPROVED_LINK_TEMPERATURE
+        intercept = _LATENT_INTERCEPT
+    elif regime == "concept_shift":
+        coefficients = _CONCEPT_COEFFICIENTS
+        categorical_scale = 1.0
+        temperature = _BASELINE_LINK_TEMPERATURE
+        intercept = _CONCEPT_INTERCEPT
     elif regime in {"baseline", "covariate_shift"}:
         coefficients = _BASELINE_COEFFICIENTS
         categorical_scale = 1.0
         temperature = _BASELINE_LINK_TEMPERATURE
+        intercept = _LATENT_INTERCEPT
     else:  # pragma: no cover - guarded by DatasetConfig
         raise DataError(f"unknown regime: {regime!r}")
 
-    score = np.full(len(frame), _LATENT_INTERCEPT, dtype=float)
+    score = np.full(len(frame), intercept, dtype=float)
     for name in SYNTHETIC_NUMERIC_FEATURES:
         mean, scale = _BASELINE_NUMERIC[name]
         values = frame[name].to_numpy(dtype=float)
@@ -254,9 +293,9 @@ def generate_synthetic(n_samples: int, seed: int, regime: Regime = "baseline") -
     """Generate the seeded synthetic dataset for ``regime``.
 
     One PCG64 stream is consumed in a fixed order: latent normals, categorical
-    draws, then label uniforms. ``baseline`` and ``improved_signal`` therefore
-    share identical feature values for a given seed, while ``covariate_shift``
-    changes only the feature distributions.
+    draws, then label uniforms. ``baseline``, ``improved_signal``, and
+    ``concept_shift`` therefore share identical feature values for a given seed,
+    while ``covariate_shift`` changes only the feature distributions.
     """
     if n_samples < 1:
         raise DataError(f"n_samples must be positive, got {n_samples}")
@@ -324,13 +363,23 @@ class DatasetSource:
 
 
 def _synthetic_parameters(regime: Regime, n_samples: int, seed: int) -> dict[str, Any]:
+    intercept = _CONCEPT_INTERCEPT if regime == "concept_shift" else _LATENT_INTERCEPT
     if regime == "improved_signal":
+        coefficients = _IMPROVED_COEFFICIENTS
         numeric_multipliers: dict[str, float] = dict(_IMPROVED_NUMERIC_MULTIPLIERS)
         categorical_scale: float = _IMPROVED_CATEGORICAL_SCALE
         temperature: float = _IMPROVED_LINK_TEMPERATURE
         numeric_delta: dict[str, dict[str, float]] = {}
         categorical_probabilities = _BASELINE_CATEGORICAL_PROBABILITIES
+    elif regime == "concept_shift":
+        coefficients = _CONCEPT_COEFFICIENTS
+        numeric_multipliers = {name: 1.0 for name in SYNTHETIC_NUMERIC_FEATURES}
+        categorical_scale = 1.0
+        temperature = _BASELINE_LINK_TEMPERATURE
+        numeric_delta = {}
+        categorical_probabilities = _BASELINE_CATEGORICAL_PROBABILITIES
     elif regime == "covariate_shift":
+        coefficients = _BASELINE_COEFFICIENTS
         numeric_multipliers = {name: 1.0 for name in SYNTHETIC_NUMERIC_FEATURES}
         categorical_scale = 1.0
         temperature = _BASELINE_LINK_TEMPERATURE
@@ -340,6 +389,7 @@ def _synthetic_parameters(regime: Regime, n_samples: int, seed: int) -> dict[str
         }
         categorical_probabilities = _COVARIATE_CATEGORICAL_PROBABILITIES
     else:
+        coefficients = _BASELINE_COEFFICIENTS
         numeric_multipliers = {name: 1.0 for name in SYNTHETIC_NUMERIC_FEATURES}
         categorical_scale = 1.0
         temperature = _BASELINE_LINK_TEMPERATURE
@@ -372,11 +422,9 @@ def _synthetic_parameters(regime: Regime, n_samples: int, seed: int) -> dict[str
         "label_mechanism": {
             "target_sampling": "bernoulli",
             "link": "logistic",
-            "intercept": _LATENT_INTERCEPT,
+            "intercept": intercept,
             "temperature": temperature,
-            "coefficients": dict(
-                _IMPROVED_COEFFICIENTS if regime == "improved_signal" else _BASELINE_COEFFICIENTS
-            ),
+            "coefficients": dict(coefficients),
             "numeric_multipliers": numeric_multipliers,
             "categorical_effect_scale": categorical_scale,
             "categorical_effects": {

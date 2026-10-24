@@ -11,7 +11,8 @@ version; the API never loads "the newest run".
 |---|---|---|
 | `GET /health` | always `200` while the process is alive; reports `database_reachable`, `model_loaded`, and `active_model_version` | never fails merely because no model is promoted |
 | `GET /model` | `200` with the active descriptor | `503` with an actionable body when no model is active |
-| `POST /predict` | `200` with `request_id`, `model_version`, `prediction` (`0`/`1`), `probability` (positive class) | `422` for invalid features, `503` without an active model, `500` if the loaded model cannot score |
+| `POST /predict` | `200` with `request_id`, `event_id`, `model_version`, `prediction` (`0`/`1`), `probability` (positive class) | `422` for invalid features, `503` without an active model, `500` if the loaded model cannot score |
+| `POST /labels` | `200` with `event_id`, `label`, `labeled_at`, `updated` | `404` for an unknown event, `422` for an invalid body |
 | `GET /metrics` | Prometheus text exposition | — |
 
 `GET /health` is a process/liveness signal. A database outage reports
@@ -106,10 +107,28 @@ written to `prediction_events` (Alembic revision `0003_prediction_event_id`):
 Event logging is best-effort. A failed insert increments
 `modelops_event_log_failures_total`, writes a structured error line, and still
 returns the inference response; losing an audit row never loses a prediction.
+The response's `event_id` is the identity of the row that was written, or
+`null` when the write failed. A null `event_id` cannot be labeled.
 
-`MODELOPS_EVENT_RETENTION_DAYS` (default `30`) records the retention policy:
-rows older than that are eligible for pruning. W4 defines and documents the
-policy; W5 owns the pruning job and monitoring queries.
+W5 adds `prediction_labels` (Alembic revision `0004_prediction_labels`):
+`event_id` (bigint primary key, cascading foreign key to
+`prediction_events.event_id`), `label` (`smallint` constrained to 0/1), and
+`labeled_at` (indexed `timestamptz`). `POST /labels` performs an idempotent
+upsert: the first write returns `updated: false`, a relabel returns
+`updated: true` and replaces the stored label. The endpoint has no auth
+because this is a local demonstration service.
+
+```bash
+curl -fsS -X POST http://localhost:8000/labels \
+  -H 'content-type: application/json' \
+  -d '{"event_id": 42, "label": 1}'
+```
+
+`MODELOPS_EVENT_RETENTION_DAYS` (default `30`) records the retention policy.
+`modelops events prune [--days N] [--dry-run]` deletes events older than the
+window and then the labels attached to those events; labels for surviving
+events are never removed. W5 implements the pruning job, so the policy now has
+behavior. See [`monitoring.md`](monitoring.md).
 
 ## Rollback
 

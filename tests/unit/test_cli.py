@@ -10,9 +10,7 @@ from modelops_lab.cli import app
 runner = CliRunner()
 
 STUBS = {
-    "monitor": "W5",
     "retrain": "W6",
-    "status": "W5",
 }
 
 
@@ -29,6 +27,10 @@ def test_help_exits_zero_and_lists_every_command() -> None:
         "serve",
         "rollback",
         "registry",
+        "monitor",
+        "simulate-traffic",
+        "status",
+        "events",
         *STUBS,
     ):
         assert command in result.output

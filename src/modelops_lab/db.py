@@ -23,7 +23,9 @@ from sqlalchemy import (
     DateTime,
     Engine,
     Float,
+    ForeignKey,
     Integer,
+    SmallInteger,
     String,
     Text,
     create_engine,
@@ -110,6 +112,28 @@ class PredictionEventRow(Base):
     latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
 
 
+class PredictionLabelRow(Base):
+    """Delayed ground truth for one prediction event (W5).
+
+    ``event_id`` is both the primary key and a cascading foreign key, so a
+    label can never outlive the event it describes. Relabeling is an upsert:
+    the newest label wins and ``labeled_at`` records when it was supplied.
+    """
+
+    __tablename__ = "prediction_labels"
+    __table_args__ = (CheckConstraint("label IN (0, 1)", name="ck_prediction_labels_binary"),)
+
+    event_id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        ForeignKey("prediction_events.event_id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    label: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    labeled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
 class PromotionDecisionRow(Base):
     """Auditable record of one gate evaluation and the verdict it produced."""
 
@@ -183,6 +207,7 @@ __all__ = [
     "ModelTransitionRow",
     "MIGRATIONS_DIR",
     "PredictionEventRow",
+    "PredictionLabelRow",
     "PromotionDecisionRow",
     "create_engine_for",
     "upgrade_database",

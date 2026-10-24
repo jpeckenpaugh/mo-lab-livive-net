@@ -62,7 +62,7 @@ class DatasetConfig(StrictConfigModel):
         ge=100,
         description="Rows for the synthetic generator; fixed-size loaders ignore this value.",
     )
-    regime: Literal["baseline", "covariate_shift", "improved_signal"] = Field(
+    regime: Literal["baseline", "covariate_shift", "improved_signal", "concept_shift"] = Field(
         default="baseline",
         description=(
             "Synthetic distribution/label regime; the breast-cancer loader accepts only baseline."
@@ -207,7 +207,13 @@ class PromotionConfig(StrictConfigModel):
 class ReferenceWindowConfig(StrictConfigModel):
     """Window used as the monitoring baseline."""
 
-    source: Literal["training_split", "prediction_events"]
+    source: Literal["training_split", "validation_split"] = Field(
+        default="validation_split",
+        description=(
+            "Split of the active model's dataset used as the reference window. "
+            "Validation is the default so the reference matches the promotion slice."
+        ),
+    )
     window_size: int = Field(ge=1, description="Maximum reference rows to include.")
 
 
@@ -225,6 +231,22 @@ class FeatureDriftThresholds(StrictConfigModel):
     missing_rate_delta_threshold: float = Field(ge=0.0, le=1.0)
 
 
+class PerformanceDegradationConfig(StrictConfigModel):
+    """Delayed-label performance comparison used by the W5 verdicts."""
+
+    metric: Literal["roc_auc"] = Field(
+        default="roc_auc", description="Metric compared between windows."
+    )
+    max_drop: float = Field(
+        gt=0.0,
+        le=1.0,
+        description="Absolute metric drop above which performance counts as degraded.",
+    )
+    min_labeled_samples: int = Field(
+        ge=1, description="Minimum labeled current-window rows before a verdict is asserted."
+    )
+
+
 class MonitoringConfig(StrictConfigModel):
     """Drift monitoring windows, sample guards, and report destination."""
 
@@ -235,6 +257,7 @@ class MonitoringConfig(StrictConfigModel):
     aggregate_feature_share_threshold: float = Field(
         gt=0.0, le=1.0, description="Share of drifted features that triggers an aggregate alert."
     )
+    performance_degradation: PerformanceDegradationConfig
     report_output_dir: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -246,6 +269,11 @@ class MonitoringConfig(StrictConfigModel):
         if self.current.window_size < self.min_sample_size:
             raise ValueError(
                 f"current.window_size must be at least min_sample_size={self.min_sample_size}"
+            )
+        if self.performance_degradation.min_labeled_samples > self.current.window_size:
+            raise ValueError(
+                "performance_degradation.min_labeled_samples must not exceed "
+                f"current.window_size={self.current.window_size}"
             )
         return self
 
@@ -279,7 +307,7 @@ class RuntimeSettings(BaseSettings):
         le=3650,
         description=(
             "Prediction events older than this are eligible for pruning. "
-            "W4 records the policy; W5 owns the pruning job."
+            "`modelops events prune` applies the retention window."
         ),
     )
 

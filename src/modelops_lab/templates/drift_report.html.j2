@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Drift report {{ report.report_id }}</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+           margin: 0 auto; max-width: 1100px; padding: 2rem; line-height: 1.5; }
+    h1, h2 { line-height: 1.2; }
+    h1 { margin-bottom: 0.25rem; }
+    .muted { color: #6b7280; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+    .card { border: 1px solid #d1d5db; border-radius: 8px; padding: 1rem; }
+    .verdict { font-size: 1.35rem; font-weight: 700; margin: 0.25rem 0; }
+    .drifted { color: #b91c1c; }
+    .not-drifted { color: #047857; }
+    .insufficient-data, .not-evaluated { color: #92400e; }
+    table { border-collapse: collapse; width: 100%; margin-top: 0.5rem; font-size: 0.92rem; }
+    th, td { border-bottom: 1px solid #e5e7eb; padding: 0.45rem 0.5rem; text-align: left; vertical-align: top; }
+    th { background: rgba(127, 127, 127, 0.12); }
+    code { font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>Drift report</h1>
+  <p class="muted">
+    <code>{{ report.report_id }}</code> &middot; generated {{ report.generated_at }} &middot;
+    model version <strong>{{ report.model_version }}</strong>
+  </p>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Data drift</h2>
+      <p class="verdict {{ report.data_drift.verdict|replace('_', '-') }}">{{ report.data_drift.verdict }}</p>
+      <p>{{ report.data_drift.detail }}</p>
+      {% if report.data_drift.score is not none %}<p class="muted">Drifted feature share: {{ "%.3f"|format(report.data_drift.score) }}</p>{% endif %}
+    </section>
+    <section class="card">
+      <h2>Performance degradation</h2>
+      <p class="verdict {{ report.performance_degradation.verdict|replace('_', '-') }}">{{ report.performance_degradation.verdict }}</p>
+      <p>{{ report.performance_degradation.detail }}</p>
+      {% if report.performance %}
+      <p class="muted">
+        {{ report.performance.metric }}: {{ "%.4f"|format(report.performance.reference_value) }}
+        &rarr; {{ "%.4f"|format(report.performance.current_value) }}
+        ({{ "%+.4f"|format(report.performance.delta) }});
+        {{ report.performance.labeled_sample_count }} labeled rows
+      </p>
+      {% endif %}
+    </section>
+    <section class="card">
+      <h2>Concept drift</h2>
+      <p class="verdict {{ report.concept_drift.verdict|replace('_', '-') }}">{{ report.concept_drift.verdict }}</p>
+      <p>{{ report.concept_drift.detail }}</p>
+      <p class="muted">Rule: performance degraded while data drift is not flagged.</p>
+    </section>
+  </div>
+
+  <h2>Windows and thresholds</h2>
+  <table>
+    <tr><th>Window</th><th>Source</th><th>Rows</th><th>Range</th></tr>
+    <tr>
+      <td>{{ report.reference_window.label }}</td>
+      <td>{{ report.reference_window.source }}</td>
+      <td>{{ report.reference_window.row_count }}</td>
+      <td>{{ report.reference_window.start or "not time-based" }}{% if report.reference_window.end %} &rarr; {{ report.reference_window.end }}{% endif %}</td>
+    </tr>
+    <tr>
+      <td>{{ report.current_window.label }}</td>
+      <td>{{ report.current_window.source }}</td>
+      <td>{{ report.current_window.row_count }}</td>
+      <td>{{ report.current_window.start or "no events" }}{% if report.current_window.end %} &rarr; {{ report.current_window.end }}{% endif %}</td>
+    </tr>
+  </table>
+  <p class="muted">
+    PSI threshold {{ report.thresholds.psi_threshold }};
+    KS p-value threshold {{ report.thresholds.ks_pvalue_threshold }};
+    missing-rate delta threshold {{ report.thresholds.missing_rate_delta_threshold }};
+    aggregate share threshold {{ report.thresholds.aggregate_feature_share_threshold }};
+    min sample size {{ report.thresholds.min_sample_size }};
+    performance max drop {{ report.thresholds.performance_degradation_threshold if report.thresholds.performance_degradation_threshold is not none else "not applicable" }}.
+  </p>
+
+  <h2>Per-feature statistics</h2>
+  <table>
+    <tr>
+      <th>Feature</th><th>Drifted</th><th>PSI</th><th>KS statistic</th><th>KS p-value</th>
+      <th>Missing rate (ref &rarr; cur)</th><th>Rules fired</th>
+    </tr>
+    {% for feature in report.feature_statistics %}
+    <tr>
+      <td>{{ feature.feature }}</td>
+      <td>{{ "yes" if feature.drifted else "no" }}</td>
+      <td>{{ "%.4f"|format(feature.psi) if feature.psi is not none else "n/a" }}</td>
+      <td>{{ "%.4f"|format(feature.ks_statistic) if feature.ks_statistic is not none else "n/a (categorical)" }}</td>
+      <td>{{ "%.6g"|format(feature.ks_pvalue) if feature.ks_pvalue is not none else "n/a" }}</td>
+      <td>{{ "%.4f"|format(feature.reference_missing_rate) }} &rarr; {{ "%.4f"|format(feature.current_missing_rate) }}</td>
+      <td>{% if feature_rules.get(feature.feature) %}{{ feature_rules[feature.feature]|join("; ") }}{% else %}&mdash;{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">Generated by ModelOps Lab. No scripts, no network requests, no interactive controls.</p>
+</body>
+</html>

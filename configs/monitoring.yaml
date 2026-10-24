@@ -1,12 +1,20 @@
-# Drift monitoring policy (W5). The reference window fits inside the 1200-row
-# training split produced by the defaults in training.yaml.
+# Drift monitoring policy (W5).
+#
+# The reference window is a split of the active model's own dataset artifact.
+# Validation is the default: it is the same slice the promotion gate used, so
+# the performance reference and the data reference describe the same rows.
 reference:
-  source: training_split
-  window_size: 1000
+  source: validation_split
+  window_size: 400
 
+# Most recent prediction events for the active model version, in chronological
+# order. 500 is larger than the 400-row validation split so a fresh
+# validation-sized traffic burst is fully covered.
 current:
   window_size: 500
 
+# A current window below this many rows is `insufficient_data`, never
+# `not_drifted`.
 min_sample_size: 100
 
 feature_drift:
@@ -14,6 +22,15 @@ feature_drift:
   ks_pvalue_threshold: 0.05
   missing_rate_delta_threshold: 0.05
 
+# Share of features that must exceed a per-feature rule before the aggregate
+# data-drift verdict is `drifted`.
 aggregate_feature_share_threshold: 0.3
+
+# Delayed-label performance verdict. A drop greater than max_drop is
+# degradation; below min_labeled_samples the verdict is `insufficient_data`.
+performance_degradation:
+  metric: roc_auc
+  max_drop: 0.05
+  min_labeled_samples: 100
 
 report_output_dir: reports/drift

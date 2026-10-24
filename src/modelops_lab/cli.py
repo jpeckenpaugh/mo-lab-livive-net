@@ -14,17 +14,21 @@ import json
 from pathlib import Path
 from typing import Annotated, Literal, NoReturn
 
+import mlflow
+import mlflow.sklearn
 import typer
 from mlflow.exceptions import MlflowException
+from mlflow.tracking import MlflowClient
 from sqlalchemy.exc import SQLAlchemyError
 
 from modelops_lab.config import (
     ConfigError,
+    load_monitoring_config,
     load_promotion_config,
     load_runtime_settings,
     load_training_config,
 )
-from modelops_lab.contracts import DatasetManifest, PromotionVerdict
+from modelops_lab.contracts import DatasetManifest, DriftVerdict, PromotionVerdict
 from modelops_lab.data import (
     DEFAULT_DATASET_ROOT,
     REGIMES,
@@ -34,6 +38,12 @@ from modelops_lab.data import (
     verify_dataset,
 )
 from modelops_lab.db import DatabaseError, upgrade_database
+from modelops_lab.monitoring import (
+    MonitoringError,
+    default_dataset_dir,
+    describe_result,
+    run_monitoring,
+)
 from modelops_lab.pointer import PointerError, PointerStore, PromotionConflict
 from modelops_lab.promotion import (
     DEFAULT_DECISION_DIR,
@@ -45,6 +55,7 @@ from modelops_lab.promotion import (
     registry_for,
     tag_candidate_run,
 )
+from modelops_lab.pruning import PruneError, prune_events
 from modelops_lab.registry import RegistryError
 from modelops_lab.rollback import (
     MlflowRollbackResolver,
@@ -53,12 +64,25 @@ from modelops_lab.rollback import (
     perform_reconcile,
     perform_rollback,
 )
+from modelops_lab.status_page import (
+    DEFAULT_STATUS_PATH,
+    StatusPageError,
+    gather_status,
+    write_status_page,
+)
 from modelops_lab.tracking import (
     TrackingError,
     load_run_model,
     log_training_run,
     redact_uri,
     resolve_tracking_uri,
+)
+from modelops_lab.traffic import (
+    SimulationSummary,
+    TrafficError,
+    TrafficSplit,
+    describe_summary,
+    simulate_traffic,
 )
 from modelops_lab.train import (
     EVALUATION_SPLITS,
@@ -73,8 +97,8 @@ app = typer.Typer(
     name="modelops",
     help=(
         "ModelOps Lab lifecycle commands. `data`, `train`, `evaluate`, `promote`, "
-        "`db`, `serve`, `rollback`, and `registry` are implemented; monitoring, "
-        "retraining, and the status page remain stubs."
+        "`db`, `serve`, `rollback`, `registry`, `monitor`, `simulate-traffic`, "
+        "`status`, and `events` are implemented; retraining remains a W6 stub."
     ),
     no_args_is_help=True,
     add_completion=False,
@@ -101,6 +125,13 @@ registry_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(registry_app, name="registry")
+
+events_app = typer.Typer(
+    name="events",
+    help="Operate on retained prediction events.",
+    no_args_is_help=True,
+)
+app.add_typer(events_app, name="events")
 
 
 def _not_implemented(command: str, wave: str, scope: str) -> NoReturn:
@@ -140,7 +171,10 @@ def data_prepare(
         str | None,
         typer.Option(
             "--regime",
-            help="Override dataset.regime: baseline | covariate_shift | improved_signal.",
+            help=(
+                "Override dataset.regime: baseline | covariate_shift | improved_signal | "
+                "concept_shift."
+            ),
         ),
     ] = None,
     out: Annotated[
@@ -640,9 +674,222 @@ def serve(
 
 
 @app.command()
-def monitor() -> None:
-    """Compare recent traffic with the reference window (arrives in W5)."""
-    _not_implemented("monitor", "W5", "drift statistics and report generation")
+def monitor(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Monitoring policy YAML (windows, thresholds, output directory).",
+            show_default=True,
+        ),
+    ] = Path("configs/monitoring.yaml"),
+    reference_dataset: Annotated[
+        Path | None,
+        typer.Option(
+            "--reference-dataset",
+            help=(
+                "Verified dataset artifact for the reference window; defaults to the "
+                "active model's dataset_version."
+            ),
+        ),
+    ] = None,
+    model_version: Annotated[
+        str | None,
+        typer.Option(
+            "--model-version",
+            help="Model version to monitor; defaults to the active pointer.",
+        ),
+    ] = None,
+    window_size: Annotated[
+        int | None,
+        typer.Option(
+            "--window-size",
+            help="Override current.window_size for this report.",
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            help="Directory for JSON + HTML reports; defaults to report_output_dir.",
+        ),
+    ] = None,
+    fail_on_drift: Annotated[
+        bool,
+        typer.Option(
+            "--fail-on-drift",
+            help="Exit 3 when data drift or performance degradation is flagged.",
+        ),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+    tracking_uri: Annotated[
+        str | None,
+        typer.Option(
+            "--tracking-uri",
+            help="Override tracking.uri and MLFLOW_TRACKING_URI for this invocation.",
+        ),
+    ] = None,
+    training_config: Annotated[
+        Path,
+        typer.Option(
+            "--training-config",
+            help="Training YAML supplying the default tracking destination.",
+            show_default=True,
+        ),
+    ] = Path("configs/training.yaml"),
+    promotion_config: Annotated[
+        Path,
+        typer.Option(
+            "--promotion-config",
+            help="Promotion YAML supplying the registered model name.",
+            show_default=True,
+        ),
+    ] = Path("configs/promotion.yaml"),
+) -> None:
+    """Compare the current traffic window with the active model's reference split."""
+    url = (
+        database_url.strip()
+        if database_url and database_url.strip()
+        else load_runtime_settings().database_url
+    )
+    try:
+        monitoring = load_monitoring_config(config)
+        training = load_training_config(training_config)
+        promotion = load_promotion_config(promotion_config)
+        uri = resolve_tracking_uri(training.tracking.uri, tracking_uri)
+        store = PointerStore(url)
+        active = store.active()
+        chosen_version = (
+            model_version.strip()
+            if model_version and model_version.strip()
+            else (active.model_version if active is not None else None)
+        )
+        if chosen_version is None:
+            raise MonitoringError(
+                "no active model is available; promote a model or pass --model-version"
+            )
+
+        dataset_dir = reference_dataset
+        if dataset_dir is None:
+            if active is not None and active.model_version == chosen_version:
+                dataset_dir = default_dataset_dir(active.dataset_version)
+            else:
+                client = MlflowClient(tracking_uri=uri)
+                try:
+                    version = client.get_model_version(
+                        promotion.registry.registered_model_name, chosen_version
+                    )
+                    dataset_version = client.get_run(version.run_id).data.tags.get(
+                        "dataset_version"
+                    )
+                except MlflowException as exc:
+                    raise MonitoringError(
+                        f"cannot resolve the dataset for model version {chosen_version}: {exc}"
+                    ) from exc
+                if not dataset_version:
+                    raise MonitoringError(
+                        f"model version {chosen_version} records no dataset_version tag; "
+                        "pass --reference-dataset"
+                    )
+                dataset_dir = default_dataset_dir(dataset_version)
+        loaded = load_prepared_dataset(dataset_dir)
+
+        def load_model(version: str) -> object:
+            mlflow.set_tracking_uri(uri)
+            if active is not None and active.model_version == version:
+                return mlflow.sklearn.load_model(f"runs:/{active.mlflow_run_id}/model")
+            return mlflow.sklearn.load_model(
+                f"models:/{promotion.registry.registered_model_name}/{version}"
+            )
+
+        run = run_monitoring(
+            config=monitoring,
+            database_url=url,
+            dataset=loaded,
+            model_version=chosen_version,
+            model_loader=load_model,
+            window_size=window_size,
+            output_dir=output_dir,
+        )
+    except (
+        ConfigError,
+        DataError,
+        DatabaseError,
+        DatasetValidationError,
+        MonitoringError,
+        MlflowException,
+        PointerError,
+        SQLAlchemyError,
+        OSError,
+        ValueError,
+    ) as exc:
+        _fail("monitor", str(exc))
+
+    for line in describe_result(run):
+        typer.echo(line)
+    report = run.result.report
+    if fail_on_drift and (
+        report.data_drift.verdict is DriftVerdict.DRIFTED
+        or report.performance_degradation.verdict is DriftVerdict.DRIFTED
+    ):
+        raise typer.Exit(code=3)
+
+
+@app.command("simulate-traffic")
+def simulate_traffic_command(
+    dataset: Annotated[
+        Path,
+        typer.Option(
+            "--dataset",
+            help="Verified dataset artifact directory to replay rows from.",
+        ),
+    ],
+    count: Annotated[
+        int,
+        typer.Option("--count", help="Number of prediction requests to send."),
+    ],
+    api_url: Annotated[
+        str,
+        typer.Option("--api-url", help="Base URL of the inference API."),
+    ] = "http://localhost:8000",
+    split: Annotated[
+        TrafficSplit,
+        typer.Option("--split", help="Dataset split to replay."),
+    ] = "validation",
+    with_labels: Annotated[
+        bool,
+        typer.Option(
+            "--with-labels",
+            help="POST each row's target to /labels after the prediction.",
+        ),
+    ] = False,
+    seed: Annotated[
+        int,
+        typer.Option("--seed", help="Seed for deterministic row selection."),
+    ] = 42,
+) -> None:
+    """Replay dataset rows through POST /predict, optionally posting labels."""
+    try:
+        summary: SimulationSummary = simulate_traffic(
+            dataset_dir=dataset,
+            count=count,
+            api_url=api_url,
+            split=split,
+            with_labels=with_labels,
+            seed=seed,
+        )
+    except (DataError, DatasetValidationError, TrafficError, OSError, ValueError) as exc:
+        _fail("simulate-traffic", str(exc))
+
+    for line in describe_summary(summary):
+        typer.echo(line)
 
 
 @app.command()
@@ -862,9 +1109,96 @@ def registry_reconcile(
 
 
 @app.command()
-def status() -> None:
-    """Generate the static lifecycle status page (arrives in W5)."""
-    _not_implemented("status", "W5", "the generated status page")
+def status(
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            help="Status HTML path; status.json is written alongside it.",
+            show_default=True,
+        ),
+    ] = DEFAULT_STATUS_PATH,
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Monitoring YAML supplying the report directory.",
+            show_default=True,
+        ),
+    ] = Path("configs/monitoring.yaml"),
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="Recent transitions/decisions to include."),
+    ] = 10,
+) -> None:
+    """Generate the static lifecycle status page and status.json."""
+    url = (
+        database_url.strip()
+        if database_url and database_url.strip()
+        else load_runtime_settings().database_url
+    )
+    try:
+        monitoring = load_monitoring_config(config)
+        snapshot = gather_status(
+            database_url=url,
+            report_dir=Path(monitoring.report_output_dir),
+            limit=limit,
+        )
+        html_path, json_path = write_status_page(snapshot, output)
+    except (ConfigError, StatusPageError, PointerError, SQLAlchemyError, OSError) as exc:
+        _fail("status", str(exc))
+
+    active = snapshot.active
+    if active is None:
+        typer.echo("active: none")
+    else:
+        typer.echo(f"active: {active['model_name']} v{active['model_version']}")
+    typer.echo(f"events: {snapshot.event_total}")
+    typer.echo(f"drift_reports: {len(snapshot.reports)}")
+    typer.echo(f"status_html: {html_path}")
+    typer.echo(f"status_json: {json_path}")
+
+
+@events_app.command("prune")
+def events_prune(
+    days: Annotated[
+        int | None,
+        typer.Option(
+            "--days",
+            help="Retention window; defaults to MODELOPS_EVENT_RETENTION_DAYS.",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Count what would be deleted without changing anything."),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+) -> None:
+    """Delete prediction events older than the retention window and their labels."""
+    settings = load_runtime_settings()
+    url = database_url.strip() if database_url and database_url.strip() else settings.database_url
+    retention = days if days is not None else settings.event_retention_days
+    try:
+        result = prune_events(database_url=url, days=retention, dry_run=dry_run)
+    except (PruneError, SQLAlchemyError, OSError, ValueError) as exc:
+        _fail("events prune", str(exc))
+
+    for line in result.describe():
+        typer.echo(line)
 
 
 if __name__ == "__main__":
