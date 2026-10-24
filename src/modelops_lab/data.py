@@ -573,6 +573,17 @@ class DatasetVerification:
     directory: Path
 
 
+@dataclass(frozen=True)
+class LoadedDataset:
+    """A fully verified dataset artifact with its typed frame and split ids."""
+
+    manifest: DatasetManifest
+    splits: dict[str, list[int]]
+    schema: DatasetSchema
+    directory: Path
+    frame: pd.DataFrame
+
+
 def _manifest_json(manifest: DatasetManifest) -> bytes:
     payload = manifest.model_dump(mode="json")
     return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -809,3 +820,30 @@ def verify_dataset(directory: Path) -> DatasetVerification:
                 f"{recomputed.class_counts}, manifest records {recorded.class_counts}"
             )
     return DatasetVerification(manifest=manifest, splits=splits, schema=schema, directory=directory)
+
+
+def load_prepared_dataset(directory: Path) -> LoadedDataset:
+    """Verify an artifact directory and return its typed frame and split ids.
+
+    This deliberately delegates to :func:`verify_dataset` instead of trusting
+    ``dataset.csv`` or re-implementing verification: the manifest, canonical
+    bytes, and split fingerprints are all checked before any row reaches a
+    model. Downstream waves must use this helper rather than parsing the files
+    directly.
+    """
+    verification = verify_dataset(directory)
+    frame = read_dataset_csv(verification.directory / "dataset.csv", verification.schema)
+    return LoadedDataset(
+        manifest=verification.manifest,
+        splits=verification.splits,
+        schema=verification.schema,
+        directory=verification.directory,
+        frame=frame,
+    )
+
+
+def split_frame(loaded: LoadedDataset, name: str) -> pd.DataFrame:
+    """Return the rows of one verified split, preserving canonical order."""
+    if name not in loaded.splits:
+        raise DataError(f"unknown split {name!r}; expected one of {list(SPLIT_NAMES)}")
+    return loaded.frame.loc[loaded.frame["row_id"].isin(loaded.splits[name])].reset_index(drop=True)

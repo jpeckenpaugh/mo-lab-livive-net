@@ -243,7 +243,7 @@ class RuntimeSettings(BaseSettings):
         default="postgresql+psycopg://modelops:modelops@localhost:5432/modelops",
         min_length=1,
     )
-    mlflow_tracking_uri: str = Field(default="http://localhost:5000", min_length=1)
+    mlflow_tracking_uri: str = Field(default="http://localhost:5001", min_length=1)
     artifact_root: Path = Path("artifacts")
     app_port: int = Field(default=8000, ge=1, le=65535)
 

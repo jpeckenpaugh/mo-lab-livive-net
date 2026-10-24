@@ -174,7 +174,7 @@ def test_runtime_settings_read_environment(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert settings.database_url.endswith("/x")
     assert settings.app_port == 9001
-    assert settings.mlflow_tracking_uri == "http://localhost:5000"
+    assert settings.mlflow_tracking_uri == "http://localhost:5001"
 
 
 def test_invalid_runtime_port_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

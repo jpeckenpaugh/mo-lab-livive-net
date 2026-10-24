@@ -1,9 +1,9 @@
 # Candidate promotion policy (W3). Promotion is manual per ADR-002.
 quality_floor:
-  roc_auc: 0.85
-  precision: 0.75
-  recall: 0.75
-  f1: 0.75
+  roc_auc: 0.83
+  precision: 0.70
+  recall: 0.65
+  f1: 0.67
 
 regression_tolerance:
   roc_auc: 0.02

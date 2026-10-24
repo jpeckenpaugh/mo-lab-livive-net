@@ -75,7 +75,7 @@ Commitments made now that must be discharged by a later wave.
 | Wave | Obligation | Source |
 |---|---|---|
 | W1 | Manifest records provenance for both the generator and the optional real loader — **discharged in W1**: `generator_parameters` records the generator math/regime and the WDBC loader provenance, license note, and label transform | ADR-001 |
-| W2 | Measure the baseline, recalibrate the provisional quality floors, record the change | ADR-010 |
+| W2 | Measure the baseline, recalibrate the provisional quality floors, record the change — **discharged in W2**: floors are now ROC-AUC 0.83 / precision 0.70 / recall 0.65 / F1 0.67, calibrated across five seeds | ADR-010 |
 | W3 | Gate uses the calibrated floors; tests cover human rejection of an all-pass candidate | ADR-010 |
 | W3 | Compare candidate and active on the candidate's validation slice and record that slice in the decision | ADR-011 |
 | W5 | Define concept-drift and performance-degradation thresholds; absent labels → `not_evaluated` | ADR-010 |

@@ -1,9 +1,15 @@
 """ModelOps Lab package.
 
-W1 provides the deterministic dataset pipeline (generation, validation,
-canonical serialization, and versioned artifacts) alongside validated
-configuration and the frozen cross-wave contracts. Training and the later
-lifecycle stages arrive in later waves.
+W2 provides the deterministic dataset pipeline (generation, validation,
+canonical serialization, versioned artifacts) and reproducible training with
+MLflow experiment tracking. Registry, serving, monitoring, and retraining arrive
+in later waves.
 """
+
+import os
+
+# MLflow prints an agent-oriented hint on import. It is noise for CLI users and
+# demo output; the environment variable is MLflow's supported off switch.
+os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
 
 __version__ = "0.1.0"

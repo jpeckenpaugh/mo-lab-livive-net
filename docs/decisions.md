@@ -186,6 +186,15 @@ concept's warning against inferring degradation from drift.
 **Consequences:** W2 and W5 own explicit threshold-calibration tasks. W3's
 promotion output is only meaningful after W2 updates the floors.
 
+**W2 calibration (2026-10-24):** the provisional floors were replaced after
+measuring baseline runs across five seeds (42, 7, 123, 2024, 31337). New floors:
+ROC-AUC 0.83, precision 0.70, recall 0.65, F1 0.67; tolerance unchanged at 0.02.
+The old recall floor of 0.75 was above the measured baseline (0.744) and could
+never have been met. The new floors sit 0.026–0.051 below the worst measured
+baseline value per metric. Known rejection cases: a severely under-fit model
+(`C=1e-4`, precision/recall/F1 all 0.0) and a model trained on the
+covariate-shift regime (ROC-AUC 0.7948).
+
 ---
 
 ## ADR-011 — Dataset regime semantics and comparison slice

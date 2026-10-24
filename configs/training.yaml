@@ -22,5 +22,5 @@ model:
     solver: lbfgs
 
 tracking:
-  uri: http://localhost:5000
+  uri: http://localhost:5001
   experiment_name: modelops-lab
