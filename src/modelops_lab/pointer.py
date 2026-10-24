@@ -201,6 +201,28 @@ class PointerStore:
                 for row in rows
             ]
 
+    def decision(self, decision_id: str) -> DecisionRecord | None:
+        """Return one decision row by id, or ``None`` when it is absent."""
+        with self.session() as session:
+            row = session.get(PromotionDecisionRow, decision_id)
+            if row is None:
+                return None
+            return DecisionRecord(
+                decision_id=row.decision_id,
+                candidate_run_id=row.candidate_run_id,
+                candidate_model_version=row.candidate_model_version,
+                active_model_version_before=row.active_model_version_before,
+                verdict=row.verdict,
+                checks=list(row.checks),
+                rejection_reasons=list(row.rejection_reasons),
+                actor=row.actor,
+                reason=row.reason,
+                decided_at=utc(row.decided_at),
+                dataset_version=row.dataset_version,
+                dataset_fingerprint=row.dataset_fingerprint,
+                evaluation_split=row.evaluation_split,
+            )
+
     def transitions(self) -> list[TransitionRecord]:
         with self.session() as session:
             rows = session.query(ModelTransitionRow).order_by(ModelTransitionRow.id)
@@ -225,9 +247,13 @@ class PointerStore:
         with self.engine.begin() as connection:
             if self._is_postgres:
                 connection.execute(
-                    text("TRUNCATE TABLE promotion_decisions, model_transitions, active_model")
+                    text(
+                        "TRUNCATE TABLE prediction_events, promotion_decisions, "
+                        "model_transitions, active_model"
+                    )
                 )
             else:
+                connection.execute(text("DELETE FROM prediction_events"))
                 connection.execute(text("DELETE FROM promotion_decisions"))
                 connection.execute(text("DELETE FROM model_transitions"))
                 connection.execute(text("DELETE FROM active_model"))
@@ -343,6 +369,118 @@ class PointerStore:
             session.close()
         assert decision_path is not None
         return decision_path
+
+    def apply_rollback(
+        self,
+        *,
+        expected_active_version: str,
+        target: ActiveModel,
+        transition_decision_id: str,
+        actor: str,
+        reason: str,
+        occurred_at: datetime,
+        set_alias: Callable[[], None],
+        restore_alias: Callable[[], None],
+        write_rollback_json: Callable[[], Path],
+    ) -> Path:
+        """Atomically restore a previously active version.
+
+        Reuses the promotion critical section: advisory lock, re-read of the
+        pointer, expected-version conflict, alias move, transition append, and
+        the pointer update last. A conflict aborts before the alias is touched.
+        """
+        session = self._session_factory()
+        alias_moved = False
+        audit_path: Path | None = None
+        try:
+            with session.begin():
+                if self._is_postgres:
+                    session.execute(
+                        text("SELECT pg_advisory_xact_lock(:key)"),
+                        {"key": ADVISORY_LOCK_KEY},
+                    )
+                row = session.get(ActiveModelRow, 1)
+                observed = row.model_version if row is not None else None
+                if observed != expected_active_version:
+                    raise PromotionConflict(expected_active_version, observed)
+
+                set_alias()
+                alias_moved = True
+                session.add(
+                    ModelTransitionRow(
+                        operation="rollback",
+                        model_name=target.model_name,
+                        from_model_version=expected_active_version,
+                        to_model_version=target.model_version,
+                        run_id=target.mlflow_run_id,
+                        decision_id=transition_decision_id,
+                        actor=actor,
+                        reason=reason,
+                        occurred_at=occurred_at,
+                    )
+                )
+                audit_path = write_rollback_json()
+                assert row is not None  # expected_active_version is a concrete version
+                row.model_name = target.model_name
+                row.model_version = target.model_version
+                row.mlflow_run_id = target.mlflow_run_id
+                row.mlflow_model_id = target.mlflow_model_id
+                row.dataset_version = target.dataset_version
+                row.dataset_fingerprint = target.dataset_fingerprint
+                row.decision_id = target.decision_id
+                row.promoted_at = target.promoted_at
+                row.updated_at = target.updated_at
+        except PromotionConflict:
+            raise
+        except Exception as exc:
+            if audit_path is not None:
+                audit_path.unlink(missing_ok=True)
+            if alias_moved:
+                try:
+                    restore_alias()
+                except Exception as restore_exc:
+                    raise PointerTransactionError(
+                        "rollback failed after the registry alias moved "
+                        f"({exc}); restoring the previous alias also failed ({restore_exc}). "
+                        "Reconciliation is required: the alias may point at the rollback target."
+                    ) from exc
+                raise PointerTransactionError(
+                    f"rollback failed after the registry alias moved ({exc}); the previous "
+                    "alias was restored and no database state was committed."
+                ) from exc
+            raise
+        finally:
+            session.close()
+        assert audit_path is not None
+        return audit_path
+
+    def apply_alias_reconciliation(
+        self,
+        *,
+        expected_active_version: str | None,
+        set_alias: Callable[[], None],
+        delete_alias: Callable[[], None],
+    ) -> None:
+        """Move the alias onto the pointer under the promotion lock.
+
+        Used by ``modelops registry reconcile --fix``. The pointer is re-read
+        inside the transaction; a concurrent move aborts with
+        :class:`PromotionConflict` before the alias is touched.
+        """
+        with self.session() as session, session.begin():
+            if self._is_postgres:
+                session.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"),
+                    {"key": ADVISORY_LOCK_KEY},
+                )
+            row = session.get(ActiveModelRow, 1)
+            observed = row.model_version if row is not None else None
+            if observed != expected_active_version:
+                raise PromotionConflict(expected_active_version, observed)
+            if observed is None:
+                delete_alias()
+            else:
+                set_alias()
 
 
 def read_decision_file(path: Path) -> dict[str, Any]:

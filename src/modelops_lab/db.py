@@ -1,7 +1,8 @@
-"""PostgreSQL schema and Alembic migration entry point for promotion state.
+"""PostgreSQL schema and Alembic migration entry point for lifecycle state.
 
-The active-model pointer, its append-only transition log, and every promotion
-decision live in PostgreSQL (ADR-003). MLflow owns artifacts and run metadata;
+The active-model pointer, its append-only transition log, every promotion
+decision, and best-effort prediction events live in PostgreSQL (ADR-003).
+MLflow owns artifacts and run metadata;
 the registry alias marks approved artifacts, but the pointer row is authoritative
 for what the lifecycle considers active (ADR-006).
 
@@ -13,17 +14,21 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     CheckConstraint,
     DateTime,
     Engine,
+    Float,
     Integer,
     String,
     Text,
     create_engine,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -75,6 +80,34 @@ class ModelTransitionRow(Base):
     actor: Mapped[str] = mapped_column(String(255), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PredictionEventRow(Base):
+    """One served prediction, retained for monitoring and audit (ADR-003).
+
+    Features are JSONB in PostgreSQL so W5 can query categorical levels and
+    numeric values without a schema change. SQLite uses JSON for the unit tier.
+    """
+
+    __tablename__ = "prediction_events"
+    __table_args__ = (CheckConstraint("prediction IN (0, 1)", name="ck_prediction_events_binary"),)
+
+    # Request ids are client-supplied and deliberately not unique: a retry must
+    # still produce an event. The surrogate key is the stable identity.
+    event_id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    request_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    features: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"), nullable=False
+    )
+    prediction: Mapped[int] = mapped_column(Integer, nullable=False)
+    probability: Mapped[float] = mapped_column(Float, nullable=False)
+    model_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
 
 
 class PromotionDecisionRow(Base):
@@ -149,6 +182,7 @@ __all__ = [
     "DatabaseError",
     "ModelTransitionRow",
     "MIGRATIONS_DIR",
+    "PredictionEventRow",
     "PromotionDecisionRow",
     "create_engine_for",
     "upgrade_database",

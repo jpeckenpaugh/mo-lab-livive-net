@@ -6,8 +6,10 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SchemaVersion = Literal["1.0.0"]
-SCHEMA_VERSION: SchemaVersion = "1.0.0"
+# 1.0.0 records remain readable; every newly written contract carries 1.1.0.
+# The five contracts share one global version, so widening one field bumps all.
+SchemaVersion = Literal["1.0.0", "1.1.0"]
+SCHEMA_VERSION: SchemaVersion = "1.1.0"
 
 DatasetKind = Literal["synthetic", "breast_cancer"]
 

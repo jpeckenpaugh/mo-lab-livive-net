@@ -46,6 +46,13 @@ from modelops_lab.promotion import (
     tag_candidate_run,
 )
 from modelops_lab.registry import RegistryError
+from modelops_lab.rollback import (
+    MlflowRollbackResolver,
+    RollbackError,
+    RollbackResult,
+    perform_reconcile,
+    perform_rollback,
+)
 from modelops_lab.tracking import (
     TrackingError,
     load_run_model,
@@ -66,7 +73,8 @@ app = typer.Typer(
     name="modelops",
     help=(
         "ModelOps Lab lifecycle commands. `data`, `train`, `evaluate`, `promote`, "
-        "and `db` are implemented; later waves remain stubs."
+        "`db`, `serve`, `rollback`, and `registry` are implemented; monitoring, "
+        "retraining, and the status page remain stubs."
     ),
     no_args_is_help=True,
     add_completion=False,
@@ -86,6 +94,13 @@ db_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(db_app, name="db")
+
+registry_app = typer.Typer(
+    name="registry",
+    help="Inspect and repair the pointer/alias relationship.",
+    no_args_is_help=True,
+)
+app.add_typer(registry_app, name="registry")
 
 
 def _not_implemented(command: str, wave: str, scope: str) -> NoReturn:
@@ -596,9 +611,32 @@ def _print_promotion_result(result: PromotionResult, candidate_run_id: str) -> N
 
 
 @app.command()
-def serve() -> None:
-    """Run the inference API (arrives in W4)."""
-    _not_implemented("serve", "W4", "FastAPI serving and prediction events")
+def serve(
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Interface to bind. Use 0.0.0.0 inside a container."),
+    ] = "0.0.0.0",
+    port: Annotated[
+        int | None,
+        typer.Option(
+            "--port",
+            help="Port to bind; defaults to MODELOPS_APP_PORT (8000).",
+        ),
+    ] = None,
+) -> None:
+    """Run the FastAPI inference service."""
+    settings = load_runtime_settings()
+    chosen_port = settings.app_port if port is None else port
+    if not 1 <= chosen_port <= 65535:
+        typer.echo("modelops serve: error: --port must be between 1 and 65535", err=True)
+        raise typer.Exit(code=2)
+
+    import uvicorn
+
+    from modelops_lab.serving import create_app
+
+    typer.echo(f"serving on http://{host}:{chosen_port}")
+    uvicorn.run(create_app(settings=settings), host=host, port=chosen_port)
 
 
 @app.command()
@@ -613,10 +651,214 @@ def retrain() -> None:
     _not_implemented("retrain", "W6", "the retraining workflow")
 
 
+def _print_rollback_result(result: RollbackResult) -> None:
+    typer.echo(f"from_version: {result.from_version}")
+    typer.echo(f"to_version: {result.to_version}")
+    if result.no_op:
+        typer.echo(
+            f"no-op: version {result.to_version} is already active; "
+            "no transition, alias write, or audit record written"
+        )
+        return
+    typer.echo(f"rollback_id: {result.rollback_id}")
+    if result.verification is not None:
+        typer.echo(f"verification: PASS  {result.verification.detail}")
+    if result.audit_path is not None:
+        typer.echo(f"rollback_record: {result.audit_path}")
+
+
 @app.command()
-def rollback() -> None:
-    """Restore a previously approved model version (arrives in W4)."""
-    _not_implemented("rollback", "W4", "serving and rollback of the active pointer")
+def rollback(
+    to_version: Annotated[
+        str,
+        typer.Option(
+            "--to-version",
+            help="Previously active model version to restore, for example 1.",
+        ),
+    ],
+    reason: Annotated[
+        str,
+        typer.Option(
+            "--reason",
+            help="Why the rollback is being performed; recorded verbatim.",
+        ),
+    ],
+    actor: Annotated[
+        str | None,
+        typer.Option("--actor", help="Human or service performing the rollback."),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+    tracking_uri: Annotated[
+        str | None,
+        typer.Option(
+            "--tracking-uri",
+            help="Override tracking.uri and MLFLOW_TRACKING_URI for this invocation.",
+        ),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Promotion policy YAML supplying registry/alias settings.",
+            show_default=True,
+        ),
+    ] = Path("configs/promotion.yaml"),
+    training_config: Annotated[
+        Path,
+        typer.Option(
+            "--training-config",
+            help="Training YAML supplying the default tracking destination.",
+            show_default=True,
+        ),
+    ] = Path("configs/training.yaml"),
+    rollback_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--rollback-dir",
+            help="Directory for rollback audit records (default: artifacts/rollbacks).",
+        ),
+    ] = None,
+) -> None:
+    """Restore a previously active model version, verified before the move."""
+    if not reason.strip():
+        typer.echo("modelops rollback: error: --reason must not be empty", err=True)
+        raise typer.Exit(code=2)
+    if not to_version.strip():
+        typer.echo("modelops rollback: error: --to-version must not be empty", err=True)
+        raise typer.Exit(code=2)
+
+    chosen_actor = (actor or "").strip() or _default_actor()
+    url = (
+        database_url.strip()
+        if database_url and database_url.strip()
+        else load_runtime_settings().database_url
+    )
+    try:
+        promotion = load_promotion_config(config)
+        training = load_training_config(training_config)
+        uri = resolve_tracking_uri(training.tracking.uri, tracking_uri)
+        store = PointerStore(url)
+        registry = registry_for(tracking_uri=uri, promotion_config=promotion)
+        result = perform_rollback(
+            target_version=to_version.strip(),
+            reason=reason,
+            actor=chosen_actor,
+            store=store,
+            resolver=MlflowRollbackResolver(uri),
+            registry=registry,
+            rollback_dir=rollback_dir,
+        )
+    except PromotionConflict as exc:
+        _fail("rollback", str(exc))
+    except (
+        ConfigError,
+        RollbackError,
+        PointerError,
+        RegistryError,
+        TrackingError,
+        SQLAlchemyError,
+        OSError,
+        ValueError,
+    ) as exc:
+        _fail("rollback", str(exc))
+
+    _print_rollback_result(result)
+
+
+@registry_app.command("reconcile")
+def registry_reconcile(
+    fix: Annotated[
+        bool,
+        typer.Option(
+            "--fix",
+            help="Set the alias to the pointer under the promotion lock.",
+        ),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+    tracking_uri: Annotated[
+        str | None,
+        typer.Option(
+            "--tracking-uri",
+            help="Override tracking.uri and MLFLOW_TRACKING_URI for this invocation.",
+        ),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Promotion policy YAML supplying registry/alias settings.",
+            show_default=True,
+        ),
+    ] = Path("configs/promotion.yaml"),
+    training_config: Annotated[
+        Path,
+        typer.Option(
+            "--training-config",
+            help="Training YAML supplying the default tracking destination.",
+            show_default=True,
+        ),
+    ] = Path("configs/training.yaml"),
+) -> None:
+    """Compare the active pointer with the champion alias; repair with --fix."""
+    url = (
+        database_url.strip()
+        if database_url and database_url.strip()
+        else load_runtime_settings().database_url
+    )
+    try:
+        promotion = load_promotion_config(config)
+        training = load_training_config(training_config)
+        uri = resolve_tracking_uri(training.tracking.uri, tracking_uri)
+        result = perform_reconcile(
+            store=PointerStore(url),
+            registry=registry_for(tracking_uri=uri, promotion_config=promotion),
+            fix=fix,
+        )
+    except PromotionConflict as exc:
+        _fail("registry reconcile", str(exc))
+    except (
+        ConfigError,
+        RollbackError,
+        PointerError,
+        RegistryError,
+        TrackingError,
+        SQLAlchemyError,
+        OSError,
+        ValueError,
+    ) as exc:
+        _fail("registry reconcile", str(exc))
+
+    typer.echo(
+        "pointer_version: "
+        + (result.pointer_version if result.pointer_version is not None else "<none>")
+    )
+    typer.echo(
+        "alias_version: "
+        + (result.alias_version if result.alias_version is not None else "<unset>")
+    )
+    if result.consistent:
+        if result.fixed:
+            typer.echo(f"reconciled: {result.detail}")
+        else:
+            typer.echo(f"consistent: {result.detail}")
+        return
+    typer.echo(f"mismatch: {result.detail}")
+    typer.echo("re-run with --fix to move the alias onto the pointer", err=True)
+    raise typer.Exit(code=1)
 
 
 @app.command()

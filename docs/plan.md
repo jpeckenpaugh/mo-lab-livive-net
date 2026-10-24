@@ -78,8 +78,9 @@ Commitments made now that must be discharged by a later wave.
 | W2 | Measure the baseline, recalibrate the provisional quality floors, record the change — **discharged in W2**: floors are now ROC-AUC 0.83 / precision 0.70 / recall 0.65 / F1 0.67, calibrated across five seeds | ADR-010 |
 | W3 | Gate uses the calibrated floors; tests cover human rejection of an all-pass candidate — **discharged in W3**: `promotion.py` reads every floor/tolerance from `configs/promotion.yaml`; unit and integration tests reject an all-pass candidate via `--reject` with a mandatory reason | ADR-010 |
 | W3 | Compare candidate and active on the candidate's validation slice and record that slice in the decision — **discharged in W3**: `regression_vs_active` evaluates both models on the resolved candidate slice; `evaluation_split` is a required config literal and is stored in `promotion_decisions` and each decision JSON | ADR-011 |
-| W4 | Ship a registry reconciliation command and reuse the promotion lock + expected-version check for rollback | ADR-012 |
+| W4 | Ship a registry reconciliation command and reuse the promotion lock + expected-version check for rollback — **discharged in W4**: `modelops registry reconcile [--fix]` and `perform_rollback` reuse `pg_advisory_xact_lock` + the expected-version check; unit and integration tests cover conflict-with-no-writes, failed pre-commit smoke, no-op, alias repair, and no-restart serving | ADR-012 |
 | W5 | Define concept-drift and performance-degradation thresholds; absent labels → `not_evaluated` | ADR-010 |
+| W5 | Implement prediction-event pruning using `MODELOPS_EVENT_RETENTION_DAYS`, which exists as configuration but has no behavior yet | ADR-003 |
 | W6 | Serialize same-run registration across processes before allowing concurrent retraining | ADR-012 |
 | W7 | Choose and add the repository license before any public announcement | PM open item |
 

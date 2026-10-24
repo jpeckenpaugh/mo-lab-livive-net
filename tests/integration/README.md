@@ -13,6 +13,8 @@ MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
   uv run pytest -m integration
 ```
 
-The promotion tests also apply the Alembic migrations before they start and
-truncate the three promotion tables between tests. There are intentionally no
-placeholder tests here.
+The tests apply the Alembic migrations before they start and truncate the
+promotion tables (plus `prediction_events`) between tests. Serving/rollback
+coverage promotes two real versions, serves them through `TestClient`, rolls
+back with the CLI, and asserts the event rows in PostgreSQL. There are
+intentionally no placeholder tests here.

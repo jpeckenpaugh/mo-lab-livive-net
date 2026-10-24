@@ -205,12 +205,25 @@ def test_unknown_environment_override_under_known_section_is_rejected(
 def test_runtime_settings_read_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MODELOPS_DATABASE_URL", "postgresql+psycopg://u:p@db:5432/x")
     monkeypatch.setenv("MODELOPS_APP_PORT", "9001")
+    monkeypatch.setenv("MODELOPS_EVENT_RETENTION_DAYS", "14")
 
     settings = RuntimeSettings(_env_file=None)
 
     assert settings.database_url.endswith("/x")
     assert settings.app_port == 9001
+    assert settings.event_retention_days == 14
     assert settings.mlflow_tracking_uri == "http://localhost:5001"
+
+
+def test_event_retention_defaults_to_thirty_days() -> None:
+    assert RuntimeSettings(_env_file=None).event_retention_days == 30
+
+
+def test_invalid_event_retention_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MODELOPS_EVENT_RETENTION_DAYS", "0")
+
+    with pytest.raises(ValueError, match="event_retention_days"):
+        RuntimeSettings(_env_file=None)
 
 
 def test_invalid_runtime_port_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

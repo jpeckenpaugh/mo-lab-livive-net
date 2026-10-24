@@ -229,9 +229,54 @@ def test_contract_round_trips_through_json(instance: object) -> None:
 
 def test_schema_version_is_only_on_top_level_contracts() -> None:
     payload = make_promotion_decision().model_dump(mode="json")
-    assert payload["schema_version"] == "1.0.0"
+    assert payload["schema_version"] == "1.1.0"
     assert "schema_version" not in payload["checks"][0]
     assert "schema_version" not in make_model_descriptor().model_dump(mode="json")["metrics"]
+
+
+def test_prediction_event_accepts_categorical_string_levels() -> None:
+    payload = make_prediction_event().model_dump(mode="json")
+    payload["features"] = {
+        "age": 54.0,
+        "bmi": 27.3,
+        "sex": "female",
+        "chest_pain_type": "asymptomatic",
+        "smoker": "former",
+    }
+
+    event = PredictionEvent.model_validate(payload)
+
+    assert event.schema_version == "1.1.0"
+    assert event.features["sex"] == "female"
+    assert event.features["age"] == 54.0
+
+
+def test_1_0_0_dataset_manifest_still_parses() -> None:
+    payload = make_dataset_manifest().model_dump(mode="json")
+    payload["schema_version"] = "1.0.0"
+
+    manifest = DatasetManifest.model_validate(payload)
+
+    assert manifest.schema_version == "1.0.0"
+    assert manifest.dataset_version == "synthetic-v1"
+
+
+def test_1_0_0_promotion_decision_still_parses() -> None:
+    payload = make_promotion_decision().model_dump(mode="json")
+    payload["schema_version"] = "1.0.0"
+
+    decision = PromotionDecision.model_validate(payload)
+
+    assert decision.schema_version == "1.0.0"
+    assert decision.verdict is PromotionVerdict.APPROVED
+
+
+def test_schema_version_rejects_an_unknown_version() -> None:
+    payload = make_prediction_event().model_dump(mode="json")
+    payload["schema_version"] = "2.0.0"
+
+    with pytest.raises(ValidationError, match="schema_version"):
+        PredictionEvent.model_validate(payload)
 
 
 def test_contracts_reject_unknown_fields() -> None:

@@ -330,7 +330,7 @@ def test_all_checks_pass_and_bootstrap_writes_state(
     assert path is not None and path.exists()
     restored = PromotionDecision.model_validate_json(path.read_text(encoding="utf-8"))
     assert restored == result.decision
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == "1.0.0"
+    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == "1.1.0"
 
 
 def test_run_not_finished_fails_and_blocks_approval(

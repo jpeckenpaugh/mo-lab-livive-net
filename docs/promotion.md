@@ -5,9 +5,9 @@ reasons or an approved model that both the MLflow alias and the PostgreSQL
 pointer agree on. Promotion is manual (ADR-002): the gate evaluates and records
 everything, but a human supplies the decision and its reason.
 
-The model is not served here. W4 loads the active version through the alias and
-the pointer; W3 guarantees those two stores agree after every committed
-promotion.
+W3 does not serve the model. W4's inference service reads the pointer on every
+request (and the alias for reconciliation); W3 guarantees those two stores agree
+after every committed promotion. See [`serving.md`](serving.md).
 
 ## What the gate checks
 
@@ -52,7 +52,7 @@ Every real decision is written twice:
    `checks` (JSON), `rejection_reasons` (JSON), `actor`, `reason`, `decided_at`,
    `dataset_version`, `dataset_fingerprint`, `evaluation_split`.
 2. **`artifacts/decisions/<decision_id>.json`** — exactly the frozen
-   `PromotionDecision` contract (`schema_version 1.0.0`), so it round-trips
+   `PromotionDecision` contract (`schema_version 1.1.0`), so it round-trips
    through `PromotionDecision.model_validate`. The JSON and the database row
    carry the same decision id, verdict, checks, actor, and reason. The file is
    written before the transaction commits and removed if the commit fails.
@@ -75,9 +75,9 @@ ADR-006 splits responsibilities:
   singleton row (`id = 1` with a check constraint), so a second row cannot
   exist. It records the model name/version, run id, logged-model id, dataset
   identity, authorizing decision id, and timestamps.
-- **`model_transitions`** is append-only: `bootstrap` for the first promotion
-  and `promotion` afterwards, with from/to versions, run, decision, actor, and
-  reason. W4 will add `rollback`.
+- **`model_transitions`** is append-only: `bootstrap` for the first promotion,
+  `promotion` afterwards, and `rollback` since W4, with from/to versions, run,
+  decision, actor, and reason.
 
 Approval order inside the transaction is: set the alias, insert the decision,
 append the transition, update the pointer **last**. The pointer is written last

@@ -273,6 +273,15 @@ class RuntimeSettings(BaseSettings):
     mlflow_tracking_uri: str = Field(default="http://localhost:5001", min_length=1)
     artifact_root: Path = Path("artifacts")
     app_port: int = Field(default=8000, ge=1, le=65535)
+    event_retention_days: int = Field(
+        default=30,
+        ge=1,
+        le=3650,
+        description=(
+            "Prediction events older than this are eligible for pruning. "
+            "W4 records the policy; W5 owns the pruning job."
+        ),
+    )
 
 
 def _format_validation_errors(path: Path, error: ValidationError) -> str:

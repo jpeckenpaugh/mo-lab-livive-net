@@ -6,17 +6,20 @@ simple; the product is the operational path from a versioned dataset through
 training, promotion, serving, monitoring, drift detection, retraining, and
 rollback.
 
-**Current status: W3 promotion gate and active pointer.** The repository contains
-the project packaging, validated configuration models, the frozen cross-wave
-contracts and their JSON Schemas, a seeded synthetic dataset generator with
-three drift regimes, schema validation, canonical serialization and
-fingerprinting, reproducible train/validation/test split manifests, the
-`modelops data` commands, a deterministic scikit-learn training pipeline that
-records a complete MLflow run, a Docker Compose PostgreSQL + MLflow stack, the
-`modelops train` / `modelops evaluate` commands, and a policy-checked promotion
-gate with an MLflow registry alias, a transactional PostgreSQL active-model
-pointer, and recorded decisions. Serving and monitoring remain stubs that exit
-with status 2 and name the wave that will implement them.
+**Current status: W4 serving, prediction events, rollback, and reconciliation.**
+The repository contains the project packaging, validated configuration models,
+the frozen cross-wave contracts and their JSON Schemas (schema version `1.1.0`;
+`1.0.0` records still parse), a seeded synthetic dataset generator with three
+drift regimes, schema validation, canonical serialization and fingerprinting,
+reproducible train/validation/test split manifests, the `modelops data`
+commands, a deterministic scikit-learn training pipeline that records a
+complete MLflow run, a Docker Compose PostgreSQL + MLflow + API stack, the
+`modelops train` / `modelops evaluate` commands, a policy-checked promotion gate
+with an MLflow registry alias and a transactional PostgreSQL active-model
+pointer, a FastAPI inference service with Prometheus metrics and best-effort
+prediction events, verified rollback, and registry reconciliation. Monitoring,
+retraining, and the status page remain stubs that exit with status 2 and name
+the wave that will implement them.
 
 ## Quick start
 
@@ -24,10 +27,11 @@ with status 2 and name the wave that will implement them.
 # 1. Install the locked environment (Python 3.12 is managed by uv).
 uv sync
 
-# 2. Start PostgreSQL and MLflow.
+# 2. Start PostgreSQL, MLflow, and the inference API.
 cp .env.example .env
 docker compose up -d --wait
 curl -fsS http://localhost:5001/health
+curl -fsS http://localhost:8000/health
 
 # 3. Generate, validate, and fingerprint a dataset artifact.
 uv run modelops data prepare --config configs/training.yaml
@@ -53,6 +57,20 @@ uv run modelops promote \
   --reason "baseline passes the calibrated floors" \
   --tracking-uri http://localhost:5001
 open http://localhost:5001
+
+# 7. Inspect and score with the promoted version through the container.
+curl -fsS http://localhost:8000/model
+curl -fsS http://localhost:8000/metrics
+
+# 8. After a second approved promotion, roll back to the prior version.
+#    The next request serves it with no restart.
+uv run modelops rollback \
+  --to-version <previous_version> --reason "demonstrate rollback" \
+  --tracking-uri http://localhost:5001
+curl -fsS http://localhost:8000/model
+
+# 9. Confirm the pointer and alias agree (or repair them under the lock).
+uv run modelops registry reconcile
 ```
 
 The dataset artifact layout, generator math, regimes, and fingerprint scheme are
@@ -123,7 +141,8 @@ not secrets.
 
 | Path | Purpose |
 |---|---|
-| `compose.yaml` | PostgreSQL + MLflow tracking stack (W2, reused by W3+) |
+| `compose.yaml` | PostgreSQL + MLflow + FastAPI inference stack |
+| `Dockerfile` | Non-root API/CLI image: pinned uv, migrations, uvicorn, healthcheck |
 | `docker/mlflow.Dockerfile` | Pinned MLflow 3.17.2 image with a stdlib healthcheck |
 | `configs/` | Validated YAML for training, promotion, and monitoring |
 | `src/modelops_lab/data.py` | Synthetic generator, canonical serialization, splits, artifact preparation, verified loading |
@@ -133,15 +152,17 @@ not secrets.
 | `src/modelops_lab/tracking.py` | MLflow run logging, audit tags, logged-model read-back |
 | `src/modelops_lab/registry.py` | MLflow registry protocol: idempotent registration, alias, version loading, reconcile |
 | `src/modelops_lab/promotion.py` | Gate checks, decision construction, approval orchestration, descriptor |
-| `src/modelops_lab/pointer.py` | Transactional active pointer, transition log, decision records |
-| `src/modelops_lab/db.py` | SQLAlchemy schema and the Alembic upgrade entry point |
-| `migrations/`, `alembic.ini` | Versioned promotion-state schema (`modelops db upgrade`) |
+| `src/modelops_lab/pointer.py` | Transactional active pointer, transition log, decision records, rollback/reconcile transactions |
+| `src/modelops_lab/serving.py` | FastAPI app, pointer-driven model cache, validation, metrics, event logging |
+| `src/modelops_lab/rollback.py` | Verified rollback and pointer/alias reconciliation |
+| `src/modelops_lab/db.py` | SQLAlchemy schema (promotion state + prediction events) and Alembic entry point |
+| `migrations/`, `alembic.ini` | Versioned schema, including `0002_prediction_events` and `0003_prediction_event_id` |
 | `src/modelops_lab/contracts/` | Frozen Pydantic contracts and schema exporter |
-| `contracts/` | Generated JSON Schemas, committed for review |
-| `src/modelops_lab/cli.py` | Typer command surface (`data`, `db`, `train`, `evaluate`, `promote`; later waves are stubs) |
-| `tests/unit/` | Docker-free tests of config, contracts, schemas, data, training, tracking, promotion, and CLI |
+| `contracts/` | Generated JSON Schemas (1.1.0), committed for review |
+| `src/modelops_lab/cli.py` | Typer command surface (`data`, `db`, `train`, `evaluate`, `promote`, `serve`, `rollback`, `registry`; W5/W6 commands are stubs) |
+| `tests/unit/` | Docker-free tests of config, contracts, schemas, data, training, tracking, promotion, serving, rollback, and CLI |
 | `tests/integration/` | Real MLflow/Postgres tests (skipped unless the test URLs are set) |
-| `tests/e2e/` | Docker Compose tests (later waves) |
+| `tests/e2e/` | Compose API tests (skipped unless `MODELOPS_TEST_API_URL` is set) |
 
 ## Documentation
 
@@ -151,3 +172,4 @@ not secrets.
 - Dataset schema, generator, regimes, and versioning: [`docs/dataset.md`](docs/dataset.md)
 - Training pipeline, metrics, MLflow run schema, and evaluate workflow: [`docs/training.md`](docs/training.md)
 - Promotion gate, decisions, active pointer, and concurrency: [`docs/promotion.md`](docs/promotion.md)
+- Serving endpoints, events, metrics, rollback, reconciliation, and containers: [`docs/serving.md`](docs/serving.md)

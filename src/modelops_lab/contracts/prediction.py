@@ -14,8 +14,12 @@ class PredictionEvent(VersionedContract):
 
     request_id: str = Field(min_length=1)
     timestamp: AwareDatetime = Field(description="UTC-aware time the request was handled.")
-    features: dict[str, float] = Field(
-        min_length=1, description="Validated model input features keyed by training column name."
+    features: dict[str, float | str] = Field(
+        min_length=1,
+        description=(
+            "Validated model input features keyed by training column name. "
+            "Numeric features are floats; categorical features are their known string level."
+        ),
     )
     prediction: Literal[0, 1] = Field(description="Binary class label returned to the caller.")
     probability: float = Field(

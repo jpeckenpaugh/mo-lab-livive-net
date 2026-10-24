@@ -208,7 +208,7 @@ version and the same `dataset.csv` bytes.
 ```
 <out>/<dataset_version>/
   dataset.csv      canonical bytes
-  manifest.json    DatasetManifest, schema_version 1.0.0
+  manifest.json    DatasetManifest, schema_version 1.1.0
   splits.json      persisted row_id lists
 ```
 

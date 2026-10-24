@@ -161,6 +161,15 @@ stable, explicit version is how a reader knows which fields to trust.
 field is missing during implementation, raise it to the PM rather than
 mutating `1.0.0`.
 
+**1.1.0 (W4, 2026-10-24):** PM-approved widening of
+`PredictionEvent.features` from `dict[str, float]` to `dict[str, float | str]`
+so prediction events can carry the three categorical features of the primary
+workload. All five contracts share one global `schema_version`, so the
+`SchemaVersion` literal accepts both `1.0.0` and `1.1.0`, newly written records
+emit `1.1.0`, and committed JSON Schemas were regenerated. No other contract
+field changed. Existing `1.0.0` dataset manifests and promotion decisions
+still parse (covered by tests).
+
 ---
 
 ## ADR-010 — Gate semantics and threshold calibration
@@ -259,5 +268,51 @@ last keeps the least recoverable failure on the least authoritative store.
 **Consequences:** W4 rollback must reuse the same lock and expected-version
 check, and ship a reconciliation command. W6 must serialize same-run
 registration across processes before concurrent retraining is allowed.
+
+**W4 discharge (2026-10-24):** `modelops rollback` and
+`modelops registry reconcile --fix` both run inside the same
+`pg_advisory_xact_lock` critical section with the expected-version check; a
+conflict leaves the alias untouched. Verification (load + smoke prediction)
+happens before the lock, so an unservable target aborts with no writes.
 **Revisit if:** MLflow offers transactional pointer semantics or a second writer
 is introduced.
+
+---
+
+## ADR-013 — PredictionEvent represents categorical inputs (schema 1.1.0)
+
+**Date:** 2026-10-24
+**Status:** Accepted
+**Context:** `PredictionEvent.features` was `dict[str, float]`, but the primary
+synthetic workload has three categorical features. As written, no valid event
+could be recorded for the default model, which would have silently undermined
+serving audit and W5 monitoring.
+**Decision:** Widen features to `dict[str, float | str]`. Because the five
+contracts share one global schema version, `SchemaVersion` now accepts both
+`1.0.0` and `1.1.0`, emits `1.1.0`, and all committed schemas are regenerated.
+Existing `1.0.0` artifacts remain readable and are covered by tests.
+**Rationale:** Raw feature values, including category labels, are what drift
+monitoring must compare against the training reference. Encoding categories as
+floats or one-hot vectors would either distort the comparison or change the
+schema invisibly.
+**Consequences:** Consumers of prediction events must handle string values. No
+prediction event existed before this change, so no data migration is required.
+
+---
+
+## ADR-014 — Prediction events are identified by event_id, not request_id
+
+**Date:** 2026-10-24
+**Status:** Accepted
+**Context:** W4 initially made `request_id` the primary key. A client retry with
+the same `X-Request-ID` therefore failed the best-effort insert and silently
+dropped a monitoring event.
+**Decision:** `prediction_events` uses a bigint `event_id` identity primary key.
+`request_id` is a non-unique indexed column, alongside indexes on timestamp and
+model version for window queries. Client request IDs longer than 128 characters
+or containing non-printable characters are rejected with a 422 naming the
+header. Duplicate request IDs produce distinct events.
+**Rationale:** Request IDs identify a caller's logical request, not a storage
+row; retries are normal and must not erase monitoring data.
+**Consequences:** Exactly-once event semantics are explicitly out of scope.
+W5 queries work on events, not on request identity.
