@@ -42,6 +42,7 @@ def test_training_config_loads_with_coherent_defaults() -> None:
     config = load_training_config(CONFIG_DIR / "training.yaml")
     assert config.dataset.kind == "synthetic"
     assert config.dataset.n_samples == 2000
+    assert config.dataset.regime == "baseline"
     assert (
         config.split.train_fraction + config.split.validation_fraction + config.split.test_fraction
         == pytest.approx(1.0)
@@ -49,6 +50,17 @@ def test_training_config_loads_with_coherent_defaults() -> None:
     assert config.model.type == "logistic_regression"
     assert config.model.hyperparameters.solver == "lbfgs"
     assert config.tracking.experiment_name == "modelops-lab"
+
+
+def test_unknown_dataset_regime_is_rejected(tmp_path: Path) -> None:
+    data = read_yaml("training.yaml")
+    data["dataset"]["regime"] = "sideways"
+    path = write_yaml(tmp_path, "training.yaml", data)
+
+    with pytest.raises(ConfigError) as error:
+        load_training_config(path)
+
+    assert "dataset.regime" in str(error.value)
 
 
 def test_promotion_and_monitoring_configs_load() -> None:

@@ -6,12 +6,33 @@ simple; the product is the operational path from a versioned dataset through
 training, promotion, serving, monitoring, drift detection, retraining, and
 rollback.
 
-**Current status: W0 scaffold.** The repository currently contains the project
+**Current status: W1 dataset pipeline.** The repository contains the project
 packaging, validated configuration models, the frozen cross-wave contracts and
-their JSON Schemas, a CLI command surface, and CI. The lifecycle itself is not
-implemented yet: every `modelops` lifecycle command exits with status 2 and
-names the wave that will implement it. Do not expect data, training, serving,
-monitoring, or registry behavior in this revision.
+their JSON Schemas, a seeded synthetic dataset generator with three drift
+regimes, schema validation, canonical serialization and fingerprinting,
+reproducible train/validation/test split manifests, and the `modelops data`
+commands. Training, serving, and monitoring remain stubs that exit with status
+2 and name the wave that will implement them.
+
+## Dataset quick start
+
+```bash
+# Generate, validate, fingerprint, and write a versioned artifact.
+uv run modelops data prepare --config configs/training.yaml --out artifacts/datasets
+
+# Re-verify an existing artifact (manifest, canonical bytes, split manifests).
+uv run modelops data validate artifacts/datasets/synthetic-v1.0.0-<fingerprint>
+
+# Alternate synthetic regimes (the optional loader is documented in docs/dataset.md).
+uv run modelops data prepare --config configs/training.yaml --regime covariate_shift
+uv run modelops data prepare --config configs/training.yaml --regime improved_signal
+```
+
+Preparing is idempotent: re-running against an existing version directory
+re-verifies it and exits 0, while a mismatch fails and suggests `--force`. The
+artifact layout, feature table, generator math, regime semantics, validation
+rules, and fingerprint scheme are documented in
+[`docs/dataset.md`](docs/dataset.md).
 
 ## Development setup
 
@@ -45,10 +66,13 @@ not secrets.
 | Path | Purpose |
 |---|---|
 | `configs/` | Validated YAML for training, promotion, and monitoring |
+| `src/modelops_lab/data.py` | Synthetic generator, canonical serialization, splits, artifact preparation |
+| `src/modelops_lab/dataset_schema.py` | Declared dataset columns, ranges, and levels |
+| `src/modelops_lab/validation.py` | Schema validation and strict CSV reading |
 | `src/modelops_lab/contracts/` | Frozen Pydantic contracts and schema exporter |
 | `contracts/` | Generated JSON Schemas, committed for review |
-| `src/modelops_lab/cli.py` | Typer command surface (stubs until their waves) |
-| `tests/unit/` | Docker-free tests of config, contracts, schemas, and CLI |
+| `src/modelops_lab/cli.py` | Typer command surface (`data` implemented; later waves are stubs) |
+| `tests/unit/` | Docker-free tests of config, contracts, schemas, data, validation, and CLI |
 | `tests/integration/` | Real Postgres/MLflow tests (later waves) |
 | `tests/e2e/` | Docker Compose tests (later waves) |
 
@@ -57,3 +81,4 @@ not secrets.
 - Product specification: [`concept.md`](concept.md)
 - Execution plan, waves, and frozen contract definitions: [`docs/plan.md`](docs/plan.md)
 - Architecture decisions: [`docs/decisions.md`](docs/decisions.md)
+- Dataset schema, generator, regimes, and versioning: [`docs/dataset.md`](docs/dataset.md)

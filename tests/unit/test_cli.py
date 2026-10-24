@@ -1,4 +1,4 @@
-"""CLI surface tests for the W0 skeleton."""
+"""CLI surface tests for the command skeleton and the implemented data group."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from modelops_lab.cli import app
 runner = CliRunner()
 
 COMMANDS = {
-    "data": "W1",
     "train": "W2",
     "evaluate": "W2",
     "promote": "W3",
@@ -26,7 +25,7 @@ def test_help_exits_zero_and_lists_every_command() -> None:
     result = runner.invoke(app, ["--help"])
 
     assert result.exit_code == 0
-    for command in COMMANDS:
+    for command in ("data", *COMMANDS):
         assert command in result.output
 
 

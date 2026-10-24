@@ -62,6 +62,12 @@ class DatasetConfig(StrictConfigModel):
         ge=100,
         description="Rows for the synthetic generator; fixed-size loaders ignore this value.",
     )
+    regime: Literal["baseline", "covariate_shift", "improved_signal"] = Field(
+        default="baseline",
+        description=(
+            "Synthetic distribution/label regime; the breast-cancer loader accepts only baseline."
+        ),
+    )
 
 
 class SplitConfig(StrictConfigModel):

@@ -186,4 +186,35 @@ concept's warning against inferring degradation from drift.
 **Consequences:** W2 and W5 own explicit threshold-calibration tasks. W3's
 promotion output is only meaningful after W2 updates the floors.
 
+---
 
+## ADR-011 — Dataset regime semantics and comparison slice
+
+**Date:** 2026-10-24
+**Status:** Accepted
+**Context:** W1 shipped three synthetic regimes used by later waves. Their
+meaning determines whether the drift and promotion demos are honest.
+**Decision:**
+1. `covariate_shift` changes **P(X) only**. Coefficients, standardization
+   constants, and the logistic link are shared with `baseline`; the
+   implementation proves this by construction and tests `P(y|X)` equality. Any
+   AUC drop under this regime is a distributional effect, **not** concept drift.
+2. `improved_signal` changes **P(y|X) only**, reusing baseline feature draws.
+   Coefficients are reweighted rather than uniformly scaled because AUC is
+   invariant to monotone score transforms; uniform scaling could not produce a
+   real improvement.
+3. The optional breast-cancer loader inverts scikit-learn's labels so
+   `target=1` means malignant. The transform is recorded in the manifest and
+   the dataset documentation.
+4. W3 compares a candidate against the active model **on the candidate's
+   validation slice**, never each model on its own slice. This keeps the
+   improved-regime comparison fair and prevents a promoted model from being
+   judged on data it was tuned against.
+**Rationale:** The concept explicitly forbids inferring performance degradation
+from drift. That distinction has to be built into the data, not asserted in
+prose.
+**Consequences:** W5 reports data drift, concept drift, and observed performance
+as three separate verdicts. W3's gate must record the evaluation slice in its
+decision record.
+**Revisit if:** A regime is added that intentionally changes both P(X) and
+P(y|X).
