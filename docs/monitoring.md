@@ -258,7 +258,7 @@ page) but are outside the window.
 uv run pytest -q -m "not integration and not e2e"
 
 # Integration: real Postgres + MLflow, three replayed scenarios.
-MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test \
 MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
   uv run pytest -m integration
 

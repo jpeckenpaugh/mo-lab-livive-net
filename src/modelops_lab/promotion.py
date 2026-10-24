@@ -27,7 +27,7 @@ import numpy as np
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 
-from modelops_lab.config import PromotionConfig
+from modelops_lab.config import PromotionConfig, load_runtime_settings
 from modelops_lab.contracts import (
     ApprovalMetadata,
     ConfusionMatrix,
@@ -686,7 +686,7 @@ def perform_promotion(
     candidate: CandidateRun,
     registry: ModelRegistry,
     store: PointerStore,
-    decision_dir: Path = DEFAULT_DECISION_DIR,
+    decision_dir: Path | None = None,
     evaluator: MetricEvaluator = _default_evaluator,
     predictor: ProbabilityPredictor = predict_probabilities,
     now: datetime | None = None,
@@ -697,6 +697,7 @@ def perform_promotion(
     if not request.actor.strip():
         raise PromotionError("a promotion actor is required")
 
+    decision_dir = decision_dir or load_runtime_settings().artifact_root / "decisions"
     decided_at = now or datetime.now(UTC)
     pointer = store.active()
     expected_active_version = pointer.model_version if pointer is not None else None
@@ -962,12 +963,18 @@ def registry_for(
     *,
     tracking_uri: str,
     promotion_config: PromotionConfig,
+    database_url: str | None = None,
 ) -> MlflowModelRegistry:
-    """Build the real MLflow registry from the promotion config."""
+    """Build the real MLflow registry from the promotion config.
+
+    ``database_url`` supplies the cross-process registration lock; when omitted
+    the registry falls back to the in-process per-run lock (unit tier).
+    """
     return MlflowModelRegistry(
         tracking_uri=tracking_uri,
         registered_model_name=promotion_config.registry.registered_model_name,
         alias=promotion_config.registry.alias,
+        lock_database_url=database_url,
     )
 
 

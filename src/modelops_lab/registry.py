@@ -12,7 +12,10 @@ support.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -20,10 +23,18 @@ import mlflow
 import mlflow.sklearn
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
-# Serializes the find-or-create sequence in this process. Cross-process races
-# are still possible, which is why the create path re-checks after an error.
-_REGISTRATION_LOCK = threading.Lock()
+from modelops_lab.db import create_engine_for
+
+# Serializes the find-or-create sequence. On PostgreSQL a transaction-scoped
+# advisory lock keyed by (a stable hash of) the run id serializes across
+# processes; SQLite and the no-database unit tier use a per-run in-process lock.
+_PER_RUN_LOCKS: dict[str, threading.Lock] = {}
+_PER_RUN_LOCKS_GUARD = threading.Lock()
+_ENGINES: dict[str, Any] = {}
+_ENGINES_GUARD = threading.Lock()
 
 
 class RegistryError(RuntimeError):
@@ -63,6 +74,84 @@ class Reconciliation:
     alias_version: str | None
     consistent: bool
     detail: str
+
+
+def registration_lock_key(run_id: str) -> int:
+    """Return the signed bigint advisory-lock key for one run id.
+
+    Hashing namespaces the key away from the pointer lock (``ADVISORY_LOCK_KEY``)
+    and makes it stable across processes and Python hash seeds.
+    """
+    digest = hashlib.sha256(f"modelops-registration:{run_id}".encode()).digest()
+    return int.from_bytes(digest[:8], "big", signed=True)
+
+
+@contextmanager
+def _inprocess_lock(run_id: str) -> Iterator[None]:
+    with _PER_RUN_LOCKS_GUARD:
+        lock = _PER_RUN_LOCKS.setdefault(run_id, threading.Lock())
+    with lock:
+        yield
+
+
+def _engine_for(database_url: str) -> Any:
+    with _ENGINES_GUARD:
+        engine = _ENGINES.get(database_url)
+        if engine is None:
+            engine = create_engine_for(database_url)
+            _ENGINES[database_url] = engine
+    return engine
+
+
+@contextmanager
+def registration_guard(database_url: str | None, run_id: str) -> Iterator[None]:
+    """Serialize registration for ``run_id`` across processes where possible.
+
+    PostgreSQL takes ``pg_advisory_xact_lock`` inside a transaction that is held
+    until the create-or-reuse decision is complete. SQLite, a missing URL, or a
+    non-PostgreSQL URL fall back to a process-wide per-run lock (the unit tier).
+    """
+    if not database_url or not database_url.startswith("postgresql"):
+        with _inprocess_lock(run_id):
+            yield
+        return
+
+    engine = _engine_for(database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": registration_lock_key(run_id)},
+            )
+            yield
+    except SQLAlchemyError as exc:
+        raise RegistryError(
+            f"cannot take the registration advisory lock for run {run_id!r}: {exc}"
+        ) from exc
+
+
+def register_run_once(
+    registry: ModelRegistry,
+    run_id: str,
+    model_id: str,
+    *,
+    database_url: str | None = None,
+) -> str:
+    """Find-or-create one model version for ``run_id`` under a serialization guard.
+
+    This is the standalone form used with an injected registry (and unit tests).
+    :meth:`MlflowModelRegistry.register_run` uses the same guard internally.
+    """
+    if not model_id:
+        raise RegistryError(f"run {run_id!r} has no logged model id to register")
+    with registration_guard(database_url, run_id):
+        existing = registry.find_version_for_run(run_id)
+        if existing is not None:
+            return existing
+        # A real MlflowModelRegistry already owns the guard in ``register_run``;
+        # call its unlocked path so the helper cannot take the same lock twice.
+        create = getattr(registry, "_register_run_locked", registry.register_run)
+        return create(run_id, model_id)
 
 
 def reconcile(registry: ModelRegistry, pointer_version: str | None) -> Reconciliation:
@@ -107,6 +196,7 @@ class MlflowModelRegistry:
         tracking_uri: str,
         registered_model_name: str,
         alias: str,
+        lock_database_url: str | None = None,
     ) -> None:
         if not registered_model_name.strip():
             raise RegistryError("registered_model_name must not be empty")
@@ -115,6 +205,7 @@ class MlflowModelRegistry:
         self.tracking_uri = tracking_uri
         self.registered_model_name = registered_model_name
         self.alias = alias
+        self.lock_database_url = lock_database_url
         self._client = MlflowClient(tracking_uri=tracking_uri)
 
     def _ensure_registered_model(self) -> None:
@@ -154,10 +245,15 @@ class MlflowModelRegistry:
         return str(latest.version)
 
     def register_run(self, run_id: str, model_id: str) -> str:
-        """Create one version for the run, or reuse the version already created."""
+        """Create one version for the run, or reuse the version already created.
+
+        The find-or-create sequence is serialized across processes by the
+        PostgreSQL advisory lock described in :func:`registration_guard`, so two
+        concurrent retrains of the same run return the same version.
+        """
         if not model_id:
             raise RegistryError(f"run {run_id!r} has no logged model id to register")
-        with _REGISTRATION_LOCK:
+        with registration_guard(self.lock_database_url, run_id):
             return self._register_run_locked(run_id, model_id)
 
     def _register_run_locked(self, run_id: str, model_id: str) -> str:

@@ -2,7 +2,7 @@
 
 Requires the Compose stack:
 
-    MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+    MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test \
     MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
       uv run pytest -m integration
 
@@ -36,7 +36,12 @@ from modelops_lab.data import (
     prepare_dataset,
     split_frame,
 )
-from modelops_lab.db import PredictionEventRow, PredictionLabelRow, upgrade_database
+from modelops_lab.db import (
+    PredictionEventRow,
+    PredictionLabelRow,
+    upgrade_database,
+    validate_test_database_url,
+)
 from modelops_lab.pointer import PointerStore
 from modelops_lab.promotion import (
     CandidateRun,
@@ -83,7 +88,7 @@ class Environment:
 
 @pytest.fixture(scope="module")
 def database_url() -> str:
-    return os.environ["MODELOPS_TEST_DATABASE_URL"]
+    return validate_test_database_url(os.environ.get("MODELOPS_TEST_DATABASE_URL"))
 
 
 @pytest.fixture(scope="module")

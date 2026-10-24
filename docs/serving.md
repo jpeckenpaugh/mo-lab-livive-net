@@ -137,7 +137,7 @@ uv run modelops rollback \
   --to-version 1 \
   --reason "precision regressed after v2" \
   --actor release-manager \
-  --database-url postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+  --database-url postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test \
   --tracking-uri http://localhost:5001
 ```
 
@@ -212,7 +212,7 @@ image rebuild occurs.
 
 ```bash
 uv run pytest -q -m "not integration and not e2e"    # SQLite/fakes
-MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test \
 MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
   uv run pytest -m integration                         # real Postgres + MLflow
 MODELOPS_TEST_API_URL=http://localhost:8000 \

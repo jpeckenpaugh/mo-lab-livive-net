@@ -2,7 +2,7 @@
 
 Skipped unless both variables point at the Compose stack:
 
-    MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+    MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test \
     MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
     uv run pytest -m integration
 
@@ -32,7 +32,7 @@ from modelops_lab.config import (
     load_training_config,
 )
 from modelops_lab.data import LoadedDataset, load_prepared_dataset, prepare_dataset
-from modelops_lab.db import upgrade_database
+from modelops_lab.db import upgrade_database, validate_test_database_url
 from modelops_lab.pointer import PointerStore, PromotionConflict
 from modelops_lab.promotion import (
     CandidateRun,
@@ -65,7 +65,7 @@ INFERIOR_CONFIG = ROOT / "configs" / "training_inferior.yaml"
 
 @pytest.fixture(scope="module")
 def database_url() -> str:
-    return os.environ["MODELOPS_TEST_DATABASE_URL"]
+    return validate_test_database_url(os.environ.get("MODELOPS_TEST_DATABASE_URL"))
 
 
 @pytest.fixture(scope="module")
@@ -265,6 +265,8 @@ def test_full_lifecycle_baseline_then_improved(
             "promote",
             "--candidate-run-id",
             improved.run_id,
+            "--dataset",
+            str(improved_dataset.directory),
             "--approve",
             "--reason",
             "re-promote the active candidate",

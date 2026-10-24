@@ -26,6 +26,7 @@ import pandas as pd
 from mlflow.exceptions import MlflowException
 from mlflow.tracking import MlflowClient
 
+from modelops_lab.config import load_runtime_settings
 from modelops_lab.pointer import (
     ActiveModel,
     PointerStore,
@@ -308,7 +309,10 @@ def perform_rollback(
             if previous_alias is not None
             else registry.delete_alias
         ),
-        write_rollback_json=_audit_writer(payload, rollback_dir or DEFAULT_ROLLBACK_DIR),
+        write_rollback_json=_audit_writer(
+            payload,
+            rollback_dir or load_runtime_settings().artifact_root / "rollbacks",
+        ),
     )
     return RollbackResult(
         rollback_id=rollback_id,

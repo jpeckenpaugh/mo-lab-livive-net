@@ -122,7 +122,7 @@ actionable detail string; the gate uses the same comparison in
 ```bash
 # Apply the migration once per database.
 uv run modelops db upgrade \
-  --database-url postgresql+psycopg://modelops:modelops@localhost:5432/modelops
+  --database-url postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test
 
 # Preview the gate (no writes).
 uv run modelops promote \
@@ -205,7 +205,7 @@ and the rejected decision was written to Postgres and
 
 ```bash
 uv run pytest -q                     # unit tier: SQLite + fake registry
-MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test \
 MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
   uv run pytest -m integration
 ```

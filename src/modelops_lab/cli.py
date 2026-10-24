@@ -30,7 +30,6 @@ from modelops_lab.config import (
 )
 from modelops_lab.contracts import DatasetManifest, DriftVerdict, PromotionVerdict
 from modelops_lab.data import (
-    DEFAULT_DATASET_ROOT,
     REGIMES,
     DataError,
     load_prepared_dataset,
@@ -46,7 +45,6 @@ from modelops_lab.monitoring import (
 )
 from modelops_lab.pointer import PointerError, PointerStore, PromotionConflict
 from modelops_lab.promotion import (
-    DEFAULT_DECISION_DIR,
     MlflowCandidateInspector,
     PromotionError,
     PromotionRequest,
@@ -57,6 +55,12 @@ from modelops_lab.promotion import (
 )
 from modelops_lab.pruning import PruneError, prune_events
 from modelops_lab.registry import RegistryError
+from modelops_lab.retrain import (
+    RetrainError,
+    RetrainRequest,
+    RetrainResult,
+    perform_retraining,
+)
 from modelops_lab.rollback import (
     MlflowRollbackResolver,
     RollbackError,
@@ -65,7 +69,6 @@ from modelops_lab.rollback import (
     perform_rollback,
 )
 from modelops_lab.status_page import (
-    DEFAULT_STATUS_PATH,
     StatusPageError,
     gather_status,
     write_status_page,
@@ -96,9 +99,9 @@ from modelops_lab.validation import DatasetValidationError
 app = typer.Typer(
     name="modelops",
     help=(
-        "ModelOps Lab lifecycle commands. `data`, `train`, `evaluate`, `promote`, "
-        "`db`, `serve`, `rollback`, `registry`, `monitor`, `simulate-traffic`, "
-        "`status`, and `events` are implemented; retraining remains a W6 stub."
+        "ModelOps Lab lifecycle commands. `data`, `train`, `evaluate`, `retrain`, "
+        "`promote`, `db`, `serve`, `rollback`, `registry`, `monitor`, "
+        "`simulate-traffic`, `status`, and `events` are implemented."
     ),
     no_args_is_help=True,
     add_completion=False,
@@ -132,14 +135,6 @@ events_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(events_app, name="events")
-
-
-def _not_implemented(command: str, wave: str, scope: str) -> NoReturn:
-    typer.echo(
-        f"modelops {command}: not implemented until {wave} ({scope}).",
-        err=True,
-    )
-    raise typer.Exit(code=2)
 
 
 def _fail(command: str, message: str) -> NoReturn:
@@ -178,13 +173,16 @@ def data_prepare(
         ),
     ] = None,
     out: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--out",
-            help="Root directory that will contain <dataset_version>/.",
-            show_default=True,
+            help=(
+                "Root directory that will contain <dataset_version>/ "
+                "(default: <artifact_root>/datasets)."
+            ),
+            show_default=False,
         ),
-    ] = DEFAULT_DATASET_ROOT,
+    ] = None,
     force: Annotated[
         bool,
         typer.Option(
@@ -195,6 +193,7 @@ def data_prepare(
 ) -> None:
     """Generate or load the dataset, validate it, and write a versioned artifact."""
     try:
+        settings = load_runtime_settings()
         training = load_training_config(config)
         if regime is not None:
             normalized = regime.strip().lower()
@@ -203,7 +202,12 @@ def data_prepare(
             training = training.model_copy(
                 update={"dataset": training.dataset.model_copy(update={"regime": normalized})}
             )
-        result = prepare_dataset(training.dataset, training.split, out_root=out, force=force)
+        result = prepare_dataset(
+            training.dataset,
+            training.split,
+            out_root=out if out is not None else settings.artifact_root / "datasets",
+            force=force,
+        )
     except (ConfigError, DataError, DatasetValidationError, OSError) as exc:
         _fail("data prepare", str(exc))
 
@@ -530,11 +534,8 @@ def promote(
 
     mode: Literal["approve", "reject", "dry-run"] = modes[0]  # type: ignore[assignment]
     chosen_actor = (actor or "").strip() or _default_actor()
-    url = (
-        database_url.strip()
-        if database_url and database_url.strip()
-        else load_runtime_settings().database_url
-    )
+    settings = load_runtime_settings()
+    url = database_url.strip() if database_url and database_url.strip() else settings.database_url
 
     try:
         promotion = load_promotion_config(config)
@@ -549,11 +550,11 @@ def promote(
                 raise PromotionError(
                     f"run {candidate_run_id} has no dataset_version tag; pass --dataset explicitly"
                 )
-            dataset_dir = DEFAULT_DATASET_ROOT / version
+            dataset_dir = settings.artifact_root / "datasets" / version
         loaded = load_prepared_dataset(dataset_dir)
 
         store = PointerStore(url)
-        registry = registry_for(tracking_uri=uri, promotion_config=promotion)
+        registry = registry_for(tracking_uri=uri, promotion_config=promotion, database_url=url)
         result = perform_promotion(
             PromotionRequest(
                 candidate_run_id=candidate_run_id,
@@ -566,7 +567,7 @@ def promote(
             candidate=candidate,
             registry=registry,
             store=store,
-            decision_dir=DEFAULT_DECISION_DIR,
+            decision_dir=settings.artifact_root / "decisions",
         )
     except PromotionConflict as exc:
         _fail("promote", str(exc))
@@ -893,9 +894,165 @@ def simulate_traffic_command(
 
 
 @app.command()
-def retrain() -> None:
-    """Run the closed retraining loop (arrives in W6)."""
-    _not_implemented("retrain", "W6", "the retraining workflow")
+def retrain(
+    dataset: Annotated[
+        Path,
+        typer.Option(
+            "--dataset",
+            help="Verified dataset artifact to train the retrained candidate on.",
+        ),
+    ],
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            "-c",
+            help="Training YAML supplying model, split, and tracking settings.",
+            show_default=True,
+        ),
+    ] = Path("configs/training.yaml"),
+    trigger: Annotated[
+        Literal["manual", "drift"],
+        typer.Option(
+            "--trigger",
+            help="manual for routine retraining; drift requires --drift-report evidence.",
+        ),
+    ] = "manual",
+    drift_report: Annotated[
+        Path | None,
+        typer.Option(
+            "--drift-report",
+            help="DriftReport JSON from `modelops monitor`; required with --trigger drift.",
+        ),
+    ] = None,
+    actor: Annotated[
+        str | None,
+        typer.Option("--actor", help="Human or service requesting the retraining run."),
+    ] = None,
+    reason: Annotated[
+        str | None,
+        typer.Option("--reason", help="Why the retraining is being run; recorded verbatim."),
+    ] = None,
+    run_name: Annotated[
+        str | None,
+        typer.Option("--run-name", help="Optional human-readable MLflow run name."),
+    ] = None,
+    tracking_uri: Annotated[
+        str | None,
+        typer.Option(
+            "--tracking-uri",
+            help="Override tracking.uri and MLFLOW_TRACKING_URI for this invocation.",
+        ),
+    ] = None,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            "--database-url",
+            help="Override MODELOPS_DATABASE_URL for this invocation.",
+        ),
+    ] = None,
+    promotion_config: Annotated[
+        Path,
+        typer.Option(
+            "--promotion-config",
+            help="Promotion policy YAML supplying floors, tolerance, and registry settings.",
+            show_default=True,
+        ),
+    ] = Path("configs/promotion.yaml"),
+    retrain_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--retrain-dir",
+            help="Directory for retraining audit records (default: <artifact_root>/retraining).",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Train a candidate, evaluate the gate without promoting, and record the audit."""
+    if trigger == "drift" and drift_report is None:
+        _fail(
+            "retrain",
+            "--trigger drift requires --drift-report PATH; retraining must be "
+            "justified by evidence, not routine",
+        )
+    chosen_actor = (actor or "").strip() or _default_actor()
+    settings = load_runtime_settings()
+    url = database_url.strip() if database_url and database_url.strip() else settings.database_url
+    try:
+        training = load_training_config(config)
+        promotion = load_promotion_config(promotion_config)
+        uri = resolve_tracking_uri(training.tracking.uri, tracking_uri)
+        store = PointerStore(url)
+        registry = registry_for(tracking_uri=uri, promotion_config=promotion, database_url=url)
+        result = perform_retraining(
+            RetrainRequest(
+                dataset_dir=dataset,
+                trigger=trigger,
+                drift_report_path=drift_report,
+                actor=chosen_actor,
+                reason=(reason or "").strip(),
+                run_name=run_name.strip() if run_name and run_name.strip() else None,
+            ),
+            training_config=training,
+            promotion_config=promotion,
+            tracking_uri=uri,
+            store=store,
+            registry=registry,
+            retrain_dir=retrain_dir or settings.artifact_root / "retraining",
+            decision_dir=settings.artifact_root / "decisions",
+        )
+    except PromotionConflict as exc:
+        _fail("retrain", str(exc))
+    except (
+        ConfigError,
+        DataError,
+        DatasetValidationError,
+        PointerError,
+        PromotionError,
+        RegistryError,
+        RetrainError,
+        TrackingError,
+        TrainingError,
+        SQLAlchemyError,
+        OSError,
+        ValueError,
+    ) as exc:
+        _fail("retrain", str(exc))
+
+    _print_retrain_result(result)
+    if result.verdict == "rejected":
+        raise typer.Exit(code=3)
+
+
+def _print_retrain_result(result: RetrainResult) -> None:
+    typer.echo(f"retrain_id: {result.retrain_id}")
+    typer.echo(f"trigger: {result.trigger}")
+    if result.drift_report_id is not None:
+        verdicts = result.drift_verdicts or {}
+        typer.echo(f"drift_report_id: {result.drift_report_id}")
+        typer.echo(
+            "drift_verdicts: "
+            f"data_drift={verdicts.get('data_drift')} "
+            f"concept_drift={verdicts.get('concept_drift')} "
+            f"performance_degradation={verdicts.get('performance_degradation')}"
+        )
+    typer.echo(f"dataset: {result.dataset_version} ({result.dataset_fingerprint[:12]})")
+    typer.echo(f"regime: {result.dataset_regime}")
+    typer.echo(f"run_id: {result.run_id}")
+    typer.echo(f"candidate_version: {result.candidate_version}")
+    typer.echo(f"gate: {result.verdict}")
+    typer.echo(f"active: {result.active_before or '<none>'} (unchanged)")
+    typer.echo("checks:")
+    for check in result.checks:
+        status = "PASS" if check.passed else "FAIL"
+        lines = check.detail.splitlines() or [""]
+        typer.echo(f"  {check.name}: {status}  {lines[0]}")
+        for line in lines[1:]:
+            typer.echo(f"    {line}")
+    typer.echo(f"audit_record: {result.audit_path}")
+    typer.echo(f"next_command: {result.next_command}")
+    for warning in result.warnings:
+        typer.echo(f"warning: {warning}", err=True)
 
 
 def _print_rollback_result(result: RollbackResult) -> None:
@@ -969,7 +1126,8 @@ def rollback(
         Path | None,
         typer.Option(
             "--rollback-dir",
-            help="Directory for rollback audit records (default: artifacts/rollbacks).",
+            help="Directory for rollback audit records (default: <artifact_root>/rollbacks).",
+            show_default=False,
         ),
     ] = None,
 ) -> None:
@@ -982,17 +1140,14 @@ def rollback(
         raise typer.Exit(code=2)
 
     chosen_actor = (actor or "").strip() or _default_actor()
-    url = (
-        database_url.strip()
-        if database_url and database_url.strip()
-        else load_runtime_settings().database_url
-    )
+    settings = load_runtime_settings()
+    url = database_url.strip() if database_url and database_url.strip() else settings.database_url
     try:
         promotion = load_promotion_config(config)
         training = load_training_config(training_config)
         uri = resolve_tracking_uri(training.tracking.uri, tracking_uri)
         store = PointerStore(url)
-        registry = registry_for(tracking_uri=uri, promotion_config=promotion)
+        registry = registry_for(tracking_uri=uri, promotion_config=promotion, database_url=url)
         result = perform_rollback(
             target_version=to_version.strip(),
             reason=reason,
@@ -1000,7 +1155,7 @@ def rollback(
             store=store,
             resolver=MlflowRollbackResolver(uri),
             registry=registry,
-            rollback_dir=rollback_dir,
+            rollback_dir=rollback_dir or settings.artifact_root / "rollbacks",
         )
     except PromotionConflict as exc:
         _fail("rollback", str(exc))
@@ -1072,7 +1227,7 @@ def registry_reconcile(
         uri = resolve_tracking_uri(training.tracking.uri, tracking_uri)
         result = perform_reconcile(
             store=PointerStore(url),
-            registry=registry_for(tracking_uri=uri, promotion_config=promotion),
+            registry=registry_for(tracking_uri=uri, promotion_config=promotion, database_url=url),
             fix=fix,
         )
     except PromotionConflict as exc:
@@ -1111,13 +1266,14 @@ def registry_reconcile(
 @app.command()
 def status(
     output: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--output",
-            help="Status HTML path; status.json is written alongside it.",
-            show_default=True,
+            help="Status HTML path; status.json is written alongside it "
+            "(default: <artifact_root>/status/status.html).",
+            show_default=False,
         ),
-    ] = DEFAULT_STATUS_PATH,
+    ] = None,
     config: Annotated[
         Path,
         typer.Option(
@@ -1140,11 +1296,9 @@ def status(
     ] = 10,
 ) -> None:
     """Generate the static lifecycle status page and status.json."""
-    url = (
-        database_url.strip()
-        if database_url and database_url.strip()
-        else load_runtime_settings().database_url
-    )
+    settings = load_runtime_settings()
+    url = database_url.strip() if database_url and database_url.strip() else settings.database_url
+    status_path = output or settings.artifact_root / "status" / "status.html"
     try:
         monitoring = load_monitoring_config(config)
         snapshot = gather_status(
@@ -1152,7 +1306,7 @@ def status(
             report_dir=Path(monitoring.report_output_dir),
             limit=limit,
         )
-        html_path, json_path = write_status_page(snapshot, output)
+        html_path, json_path = write_status_page(snapshot, status_path)
     except (ConfigError, StatusPageError, PointerError, SQLAlchemyError, OSError) as exc:
         _fail("status", str(exc))
 

@@ -45,6 +45,42 @@ class DatabaseError(RuntimeError):
     """Raised when the database cannot be reached or migrated."""
 
 
+class IntegrationDatabaseGuardError(DatabaseError):
+    """Raised when an integration test URL points at a non-test database."""
+
+
+TEST_DATABASE_SUFFIX = "_test"
+
+
+def validate_test_database_url(database_url: str | None) -> str:
+    """Return an integration-test URL, refusing anything but a ``*_test`` database.
+
+    Integration tests truncate lifecycle tables between cases. Pointing them at
+    the demo database would destroy promoted history, so the guard is a hard
+    failure rather than a warning.
+    """
+    from sqlalchemy.engine import make_url
+
+    if database_url is None or not database_url.strip():
+        raise IntegrationDatabaseGuardError(
+            "MODELOPS_TEST_DATABASE_URL is required for integration tests"
+        )
+    try:
+        parsed = make_url(database_url.strip())
+    except Exception as exc:  # SQLAlchemy raises ArgumentError for malformed URLs
+        raise IntegrationDatabaseGuardError(
+            f"invalid integration test database URL: {exc}"
+        ) from exc
+    database = (parsed.database or "").strip()
+    if not database.endswith(TEST_DATABASE_SUFFIX):
+        raise IntegrationDatabaseGuardError(
+            f"refusing to run integration tests against database {database!r}: "
+            f"the name must end in {TEST_DATABASE_SUFFIX!r} "
+            "(use postgresql+psycopg://.../modelops_test)"
+        )
+    return database_url.strip()
+
+
 class Base(DeclarativeBase):
     """Declarative base shared by the models and the migration metadata."""
 
@@ -209,7 +245,10 @@ __all__ = [
     "PredictionEventRow",
     "PredictionLabelRow",
     "PromotionDecisionRow",
+    "TEST_DATABASE_SUFFIX",
+    "IntegrationDatabaseGuardError",
     "create_engine_for",
     "upgrade_database",
     "utc",
+    "validate_test_database_url",
 ]

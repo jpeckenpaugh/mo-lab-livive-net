@@ -50,7 +50,7 @@ import numpy as np
 import pandas as pd
 from pydantic import ValidationError as PydanticValidationError
 
-from modelops_lab.config import DatasetConfig, SplitConfig
+from modelops_lab.config import DatasetConfig, SplitConfig, load_runtime_settings
 from modelops_lab.contracts import DatasetManifest, SplitManifest
 from modelops_lab.dataset_schema import (
     BREAST_CANCER_SCHEMA,
@@ -667,10 +667,11 @@ def _write_artifact(
 def prepare_dataset(
     config: DatasetConfig,
     split: SplitConfig,
-    out_root: Path = DEFAULT_DATASET_ROOT,
+    out_root: Path | None = None,
     force: bool = False,
 ) -> PreparedDataset:
     """Generate, validate, and persist one versioned dataset artifact."""
+    root = out_root or load_runtime_settings().artifact_root / "datasets"
     source = build_dataset_source(config)
     validate_dataset(source.frame, source.schema)
 
@@ -697,7 +698,7 @@ def prepare_dataset(
         created_at=datetime.now(UTC),
     )
 
-    directory = out_root / version
+    directory = root / version
     if directory.exists() and not force:
         try:
             verification = verify_dataset(directory)

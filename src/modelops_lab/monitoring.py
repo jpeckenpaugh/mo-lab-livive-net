@@ -45,7 +45,7 @@ from sklearn.metrics import roc_auc_score
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from modelops_lab.config import MonitoringConfig
+from modelops_lab.config import MonitoringConfig, load_runtime_settings
 from modelops_lab.contracts import (
     DriftReport,
     DriftThresholds,
@@ -56,7 +56,6 @@ from modelops_lab.contracts import (
     WindowSummary,
 )
 from modelops_lab.data import (
-    DEFAULT_DATASET_ROOT,
     LoadedDataset,
     split_frame,
 )
@@ -894,7 +893,7 @@ def run_monitoring(
 
 def default_dataset_dir(manifest_version: str) -> Path:
     """Location of a prepared dataset artifact for a manifest version."""
-    return DEFAULT_DATASET_ROOT / manifest_version
+    return load_runtime_settings().artifact_root / "datasets" / manifest_version
 
 
 def describe_result(run: MonitoringRun) -> list[str]:

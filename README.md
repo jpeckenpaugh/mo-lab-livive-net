@@ -6,8 +6,8 @@ simple; the product is the operational path from a versioned dataset through
 training, promotion, serving, monitoring, drift detection, retraining, and
 rollback.
 
-**Current status: W5 monitoring, drift reports, traffic simulation, status page,
-and event pruning.** The repository contains the project packaging, validated
+**Current status: W6 retraining loop, registration serialization, and rollback
+hardening.** The repository contains the project packaging, validated
 configuration models, the frozen cross-wave contracts and their JSON Schemas
 (schema version `1.1.0`; `1.0.0` records still parse), a seeded synthetic
 dataset generator with four drift regimes (baseline, covariate shift, improved
@@ -21,8 +21,11 @@ active-model pointer, a FastAPI inference service with Prometheus metrics,
 best-effort prediction events, delayed labels, and a static status page,
 verified rollback, registry reconciliation, in-repo drift statistics with three
 independent verdicts, generated JSON + HTML drift reports, a deterministic
-traffic simulator, and prediction-event retention pruning. Retraining remains
-a stub that exits with status 2 and names W6.
+traffic simulator, prediction-event retention pruning, and a closed retraining
+loop that trains and evaluates a candidate from drift evidence but never
+promotes it automatically. Same-run registration is serialized across processes
+with a PostgreSQL advisory lock, and promotion-versus-rollback races leave the
+pointer, alias, and transitions consistent.
 
 ## Quick start
 
@@ -88,7 +91,18 @@ uv run modelops data prepare --config configs/training.yaml --regime concept_shi
 #   concept not_evaluated (confounded); replay <concept-dataset>: data stable,
 #   performance drifted, concept drifted. Exact commands: docs/monitoring.md.
 
-# 12. Generate the static lifecycle page and check retention.
+# 12. Retrain from drift evidence. This trains and evaluates only; it never
+#     promotes. An eligible result prints the exact promotion command to run.
+uv run modelops retrain \
+  --dataset artifacts/datasets/synthetic-v1.0.0-<fingerprint> \
+  --trigger drift \
+  --drift-report reports/drift/drift-<timestamp>-v<version>-<id>.json \
+  --reason "drift evidence justifies a new candidate" \
+  --tracking-uri http://localhost:5001
+# Exit 0 = eligible; run the printed `modelops promote ... --approve` by hand.
+# Exit 3 = rejected; active stays unchanged and the audit says why.
+
+# 13. Generate the static lifecycle page and check retention.
 uv run modelops status --output artifacts/status/status.html
 uv run modelops events prune --dry-run
 ```
@@ -143,10 +157,17 @@ With the Compose stack running, exercise the real PostgreSQL + MLflow integratio
 tier:
 
 ```bash
-MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops \
+MODELOPS_TEST_DATABASE_URL=postgresql+psycopg://modelops:modelops@localhost:5432/modelops_test \
 MODELOPS_TEST_TRACKING_URI=http://localhost:5001 \
   uv run pytest -m integration
 ```
+
+Integration fixtures refuse to run against a database whose name does not end
+in `_test`, because they truncate lifecycle tables between cases. Fresh Compose
+volumes create `modelops_test` via `docker/postgres-init.sql`; for an existing
+volume run `docker compose exec postgres createdb -U modelops modelops_test`.
+Tests write generated artifacts under a temporary `MODELOPS_ARTIFACT_ROOT`, never
+under the repository's `artifacts/` or `reports/`.
 
 Regenerate the committed contract schemas after an intentional contract change:
 
@@ -181,11 +202,12 @@ not secrets.
 | `src/modelops_lab/traffic.py` | Deterministic dataset replay through `/predict` and `/labels` |
 | `src/modelops_lab/status_page.py` | Static lifecycle status page and `status.json` |
 | `src/modelops_lab/pruning.py` | Retention pruning for events and their labels |
+| `src/modelops_lab/retrain.py` | Drift-justified retraining, evaluation-only gate, audit records |
 | `migrations/`, `alembic.ini` | Versioned schema, including `0002_prediction_events`, `0003_prediction_event_id`, and `0004_prediction_labels` |
 | `src/modelops_lab/contracts/` | Frozen Pydantic contracts and schema exporter |
 | `contracts/` | Generated JSON Schemas (1.1.0), committed for review |
-| `src/modelops_lab/cli.py` | Typer command surface (`data`, `db`, `train`, `evaluate`, `promote`, `serve`, `rollback`, `registry`, `monitor`, `simulate-traffic`, `status`, `events`; W6 retraining is a stub) |
-| `tests/unit/` | Docker-free tests of config, contracts, schemas, data, training, tracking, promotion, serving, rollback, monitoring, labels, traffic, pruning, status, and CLI |
+| `src/modelops_lab/cli.py` | Typer command surface (`data`, `db`, `train`, `evaluate`, `retrain`, `promote`, `serve`, `rollback`, `registry`, `monitor`, `simulate-traffic`, `status`, `events`) |
+| `tests/unit/` | Docker-free tests of config, contracts, schemas, data, training, tracking, promotion, serving, rollback, monitoring, retraining, registration serialization, labels, traffic, pruning, status, and CLI |
 | `tests/integration/` | Real MLflow/Postgres tests (skipped unless the test URLs are set) |
 | `tests/e2e/` | Compose API tests (skipped unless `MODELOPS_TEST_API_URL` is set) |
 
@@ -199,3 +221,4 @@ not secrets.
 - Promotion gate, decisions, active pointer, and concurrency: [`docs/promotion.md`](docs/promotion.md)
 - Serving endpoints, events, metrics, rollback, reconciliation, and containers: [`docs/serving.md`](docs/serving.md)
 - Drift statistics, three verdicts, reports, simulator, status page, and retention: [`docs/monitoring.md`](docs/monitoring.md)
+- Retraining loop, drift justification, audit record, registration serialization, and the rollback race: [`docs/retraining.md`](docs/retraining.md)
